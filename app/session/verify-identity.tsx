@@ -9,15 +9,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as WebBrowser from "expo-web-browser";
@@ -257,169 +255,165 @@ function VerifyIdentityScreenInner() {
       headerTitle="Verify Identity"
       scrollable={false}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.flex}
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        bottomOffset={20}
       >
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={styles.subtitle}>
-            We need a few details to enable payouts. Stripe handles SSN + phone
-            verification in the next step.
-          </Text>
+        <Text style={styles.subtitle}>
+          We need a few details to enable payouts. Stripe handles SSN + phone
+          verification in the next step.
+        </Text>
 
-          <View style={styles.section}>
-            <Text style={styles.label}>Legal First Name</Text>
+        <View style={styles.section}>
+          <Text style={styles.label}>Legal First Name</Text>
+          <TextInput
+            style={styles.input}
+            value={firstName}
+            onChangeText={setFirstName}
+            placeholder="First name on government ID"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="words"
+            autoComplete="given-name"
+            textContentType="givenName"
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Legal Last Name</Text>
+          <TextInput
+            style={styles.input}
+            value={lastName}
+            onChangeText={setLastName}
+            placeholder="Last name on government ID"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="words"
+            autoComplete="family-name"
+            textContentType="familyName"
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Date of Birth</Text>
+          <TextInput
+            style={styles.input}
+            value={formatDobDisplay(dobDigits)}
+            onChangeText={handleDob}
+            placeholder="MM/DD/YYYY"
+            placeholderTextColor={Colors.textMuted}
+            keyboardType="number-pad"
+            maxLength={10}
+          />
+          <Text style={styles.hint}>Must be 18 or older</Text>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Street Address</Text>
+          <TextInput
+            style={styles.input}
+            value={line1}
+            onChangeText={setLine1}
+            placeholder="123 Main Street"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="words"
+            autoComplete="address-line1"
+            textContentType="streetAddressLine1"
+          />
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.labelRow}>
+            <Text style={styles.label}>Apt / Unit</Text>
+            <Text style={styles.optional}>Optional</Text>
+          </View>
+          <TextInput
+            style={styles.input}
+            value={line2}
+            onChangeText={setLine2}
+            placeholder="Apt 4B"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="words"
+            autoComplete="address-line2"
+            textContentType="streetAddressLine2"
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>City</Text>
+          <TextInput
+            style={styles.input}
+            value={city}
+            onChangeText={setCity}
+            placeholder="Nashville"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="words"
+            autoComplete="address-line1"
+            textContentType="addressCity"
+          />
+        </View>
+
+        <View style={styles.row}>
+          <View style={[styles.section, styles.stateCol]}>
+            <Text style={styles.label}>State</Text>
             <TextInput
-              style={styles.input}
-              value={firstName}
-              onChangeText={setFirstName}
-              placeholder="First name on government ID"
+              style={[styles.input, styles.stateInput]}
+              value={stateCode}
+              onChangeText={handleState}
+              placeholder="TN"
               placeholderTextColor={Colors.textMuted}
-              autoCapitalize="words"
-              autoComplete="given-name"
-              textContentType="givenName"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={2}
+              textContentType="addressState"
             />
           </View>
-
-          <View style={styles.section}>
-            <Text style={styles.label}>Legal Last Name</Text>
+          <View style={[styles.section, styles.zipCol]}>
+            <Text style={styles.label}>ZIP Code</Text>
             <TextInput
               style={styles.input}
-              value={lastName}
-              onChangeText={setLastName}
-              placeholder="Last name on government ID"
-              placeholderTextColor={Colors.textMuted}
-              autoCapitalize="words"
-              autoComplete="family-name"
-              textContentType="familyName"
-            />
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.label}>Date of Birth</Text>
-            <TextInput
-              style={styles.input}
-              value={formatDobDisplay(dobDigits)}
-              onChangeText={handleDob}
-              placeholder="MM/DD/YYYY"
+              value={zip}
+              onChangeText={handleZip}
+              placeholder="37203"
               placeholderTextColor={Colors.textMuted}
               keyboardType="number-pad"
-              maxLength={10}
-            />
-            <Text style={styles.hint}>Must be 18 or older</Text>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.label}>Street Address</Text>
-            <TextInput
-              style={styles.input}
-              value={line1}
-              onChangeText={setLine1}
-              placeholder="123 Main Street"
-              placeholderTextColor={Colors.textMuted}
-              autoCapitalize="words"
-              autoComplete="address-line1"
-              textContentType="streetAddressLine1"
+              maxLength={5}
+              textContentType="postalCode"
             />
           </View>
+        </View>
 
-          <View style={styles.section}>
-            <View style={styles.labelRow}>
-              <Text style={styles.label}>Apt / Unit</Text>
-              <Text style={styles.optional}>Optional</Text>
-            </View>
-            <TextInput
-              style={styles.input}
-              value={line2}
-              onChangeText={setLine2}
-              placeholder="Apt 4B"
-              placeholderTextColor={Colors.textMuted}
-              autoCapitalize="words"
-              autoComplete="address-line2"
-              textContentType="streetAddressLine2"
-            />
+        {error ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
           </View>
+        ) : null}
 
-          <View style={styles.section}>
-            <Text style={styles.label}>City</Text>
-            <TextInput
-              style={styles.input}
-              value={city}
-              onChangeText={setCity}
-              placeholder="Nashville"
-              placeholderTextColor={Colors.textMuted}
-              autoCapitalize="words"
-              autoComplete="address-line1"
-              textContentType="addressCity"
-            />
-          </View>
+        <View style={styles.disclosure}>
+          <Text style={styles.disclosureText}>
+            Your information is sent directly to Stripe, our payment processor.
+            Niyah does not store your date of birth, SSN, or physical address.
+            US bank accounts only.
+          </Text>
+        </View>
 
-          <View style={styles.row}>
-            <View style={[styles.section, styles.stateCol]}>
-              <Text style={styles.label}>State</Text>
-              <TextInput
-                style={[styles.input, styles.stateInput]}
-                value={stateCode}
-                onChangeText={handleState}
-                placeholder="TN"
-                placeholderTextColor={Colors.textMuted}
-                autoCapitalize="characters"
-                autoCorrect={false}
-                maxLength={2}
-                textContentType="addressState"
-              />
-            </View>
-            <View style={[styles.section, styles.zipCol]}>
-              <Text style={styles.label}>ZIP Code</Text>
-              <TextInput
-                style={styles.input}
-                value={zip}
-                onChangeText={handleZip}
-                placeholder="37203"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="number-pad"
-                maxLength={5}
-                textContentType="postalCode"
-              />
-            </View>
-          </View>
-
-          {error ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          ) : null}
-
-          <View style={styles.disclosure}>
-            <Text style={styles.disclosureText}>
-              Your information is sent directly to Stripe, our payment
-              processor. Niyah does not store your date of birth, SSN, or
-              physical address. US bank accounts only.
-            </Text>
-          </View>
-
-          <View style={styles.footer}>
-            <Button
-              title={isLoading ? "Verifying..." : "Continue"}
-              onPress={handleContinue}
-              disabled={isLoading}
-              loading={isLoading}
-              size="large"
-            />
-            <Pressable
-              onPress={() => router.back()}
-              style={styles.cancelButton}
-              disabled={isLoading}
-            >
-              <Text style={styles.cancelText}>Cancel</Text>
-            </Pressable>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        <View style={styles.footer}>
+          <Button
+            title={isLoading ? "Verifying..." : "Continue"}
+            onPress={handleContinue}
+            disabled={isLoading}
+            loading={isLoading}
+            size="large"
+          />
+          <Pressable
+            onPress={() => router.back()}
+            style={styles.cancelButton}
+            disabled={isLoading}
+          >
+            <Text style={styles.cancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      </KeyboardAwareScrollView>
     </SessionScreenScaffold>
   );
 }

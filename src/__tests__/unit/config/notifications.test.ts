@@ -252,16 +252,95 @@ describe("notifications", () => {
   // ─── setupForegroundHandler ─────────────────────────────────────────────────
 
   describe("setupForegroundHandler", () => {
-    it("registers onMessage handler and returns unsubscribe", () => {
-      const mockUnsub = jest.fn();
-      sharedInstance.onMessage.mockReturnValue(mockUnsub);
+    it("registers onMessage handler and returns combined cleanup", () => {
+      const mockMessageUnsub = jest.fn();
+      const mockTapUnsub = jest.fn();
+      sharedInstance.onMessage.mockReturnValue(mockMessageUnsub);
+      const notifee = jest.requireMock("@notifee/react-native").default as {
+        onForegroundEvent: jest.Mock;
+      };
+      notifee.onForegroundEvent.mockReturnValueOnce(mockTapUnsub);
 
       const unsub = setupForegroundHandler();
 
       expect(sharedInstance.onMessage).toHaveBeenCalledWith(
         expect.any(Function),
       );
-      expect(unsub).toBe(mockUnsub);
+      expect(notifee.onForegroundEvent).toHaveBeenCalled();
+
+      unsub();
+      expect(mockMessageUnsub).toHaveBeenCalledTimes(1);
+      expect(mockTapUnsub).toHaveBeenCalledTimes(1);
+    });
+
+    it("invokes notifee.displayNotification with timeSensitive iOS payload on incoming FCM message", async () => {
+      let capturedHandler:
+        | ((msg: {
+            notification: { title: string; body: string };
+            data: Record<string, string>;
+          }) => Promise<void>)
+        | undefined;
+      sharedInstance.onMessage.mockImplementation((fn) => {
+        capturedHandler = fn as typeof capturedHandler;
+        return jest.fn();
+      });
+      const notifee = jest.requireMock("@notifee/react-native").default as {
+        displayNotification: jest.Mock;
+        onForegroundEvent: jest.Mock;
+      };
+
+      setupForegroundHandler();
+      expect(capturedHandler).toBeDefined();
+      await capturedHandler!({
+        notification: { title: "Group invite", body: "Sarah invited you" },
+        data: { type: "group_invite", sessionId: "abc123" },
+      });
+
+      expect(notifee.displayNotification).toHaveBeenCalledTimes(1);
+      const call = notifee.displayNotification.mock.calls[0][0];
+      expect(call.title).toBe("Group invite");
+      expect(call.body).toBe("Sarah invited you");
+      expect(call.data).toEqual({
+        type: "group_invite",
+        sessionId: "abc123",
+      });
+      expect(call.ios.interruptionLevel).toBe("timeSensitive");
+      expect(call.ios.sound).toBe("default");
+      expect(call.ios.categoryId).toBe("group_invite");
+    });
+
+    it("routes tap events through handleNotificationNavigation with correct path", () => {
+      let capturedTapHandler:
+        | ((event: {
+            type: number;
+            detail: { notification: { data: Record<string, string> } };
+          }) => void)
+        | undefined;
+      const notifee = jest.requireMock("@notifee/react-native").default as {
+        onForegroundEvent: jest.Mock;
+      };
+      const { EventType } = jest.requireMock("@notifee/react-native") as {
+        EventType: { PRESS: number };
+      };
+      notifee.onForegroundEvent.mockImplementation((fn) => {
+        capturedTapHandler = fn;
+        return jest.fn();
+      });
+      (router.push as jest.Mock).mockClear();
+
+      setupForegroundHandler();
+      capturedTapHandler!({
+        type: EventType.PRESS,
+        detail: {
+          notification: {
+            data: { type: "surrender_confirm_pending", sessionId: "s1" },
+          },
+        },
+      });
+
+      expect(router.push).toHaveBeenCalledWith(
+        "/session/active?confirmSurrender=true",
+      );
     });
   });
 
@@ -273,6 +352,38 @@ describe("notifications", () => {
 
       expect(sharedInstance.setBackgroundMessageHandler).toHaveBeenCalledWith(
         expect.any(Function),
+      );
+    });
+
+    it("registers notifee background tap handler that routes surrender_confirm_pending", () => {
+      const notifee = jest.requireMock("@notifee/react-native").default as {
+        onBackgroundEvent: jest.Mock;
+      };
+      const { EventType } = jest.requireMock("@notifee/react-native") as {
+        EventType: { PRESS: number };
+      };
+      let capturedHandler:
+        | ((event: {
+            type: number;
+            detail: { notification: { data: Record<string, string> } };
+          }) => Promise<void>)
+        | undefined;
+      notifee.onBackgroundEvent.mockImplementation((fn) => {
+        capturedHandler = fn as typeof capturedHandler;
+      });
+      (router.push as jest.Mock).mockClear();
+
+      setupBackgroundHandler();
+      expect(capturedHandler).toBeDefined();
+
+      capturedHandler!({
+        type: EventType.PRESS,
+        detail: {
+          notification: { data: { type: "surrender_confirm_pending" } },
+        },
+      });
+      expect(router.push).toHaveBeenCalledWith(
+        "/session/active?confirmSurrender=true",
       );
     });
   });

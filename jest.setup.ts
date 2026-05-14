@@ -468,6 +468,24 @@ jest.mock("react-native-safe-area-context", () => ({
   })),
 }));
 
+jest.mock("react-native-keyboard-controller", () => ({
+  KeyboardProvider: ({ children }: { children: unknown }) => children,
+  KeyboardAvoidingView: "KeyboardAvoidingView",
+  KeyboardAwareScrollView: "KeyboardAwareScrollView",
+}));
+
+jest.mock("@notifee/react-native", () => ({
+  __esModule: true,
+  default: {
+    displayNotification: jest.fn().mockResolvedValue(undefined),
+    createChannel: jest.fn().mockResolvedValue("niyah-default"),
+    onForegroundEvent: jest.fn(() => () => {}),
+    onBackgroundEvent: jest.fn(),
+  },
+  AndroidImportance: { HIGH: 4, DEFAULT: 3 },
+  EventType: { PRESS: 1, DELIVERED: 3, DISMISSED: 0 },
+}));
+
 // ============================================================================
 // TEST UTILITIES
 // ============================================================================

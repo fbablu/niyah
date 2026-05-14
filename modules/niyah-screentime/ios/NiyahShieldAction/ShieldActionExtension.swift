@@ -1,5 +1,6 @@
 import Foundation
 import ManagedSettings
+import UserNotifications
 
 // The named ManagedSettingsStore is shared by name across processes within
 // the same team. Both the main app and this extension must use the same
@@ -24,9 +25,16 @@ extension ManagedSettingsStore.Name {
 class NiyahShieldActionExtension: ShieldActionDelegate {
 
     // ── Shared storage ─────────────────────────────────────────────────────────
-    private static let appGroupID       = "group.com.niyah.app"
-    private static let surrenderKey     = "niyah_surrender_requested"
-    private static let blockingKey      = "niyah_is_blocking"
+    private static let appGroupID            = "group.com.niyah.app"
+    // Legacy auto-fire flag — only set as fallback when scheduling the
+    // two-step confirm push fails (e.g. notification permission revoked).
+    private static let surrenderKey          = "niyah_surrender_requested"
+    // New two-step flag — set when the user taps "Surrender Session" so the
+    // app knows a confirm is in-flight if the user opens it without the push.
+    private static let pendingSurrenderKey   = "niyah_surrender_pending"
+    private static let blockingKey           = "niyah_is_blocking"
+    private static let surrenderPushID       = "niyah-surrender-confirm"
+    private static let surrenderCategoryID   = "SURRENDER_CONFIRM"
 
     private var sharedDefaults: UserDefaults {
         UserDefaults(suiteName: Self.appGroupID) ?? .standard
@@ -70,26 +78,60 @@ class NiyahShieldActionExtension: ShieldActionDelegate {
             completionHandler(.close)
 
         case .secondaryButtonPressed:
-            // "Surrender Session" — set a flag and open the main app.
-            // Blocking stays ACTIVE until the user confirms surrender in the
-            // Niyah app (type QUIT). This prevents the desync where the shield
-            // used to unblock apps immediately but the app still showed the
-            // session as active.
-            //
-            //   1. Write the surrender flag to shared UserDefaults so the main
-            //      app can detect the request on foreground.
-            //   2. Attempt to launch Niyah via the custom URL scheme so the
-            //      user lands directly in the surrender confirmation flow.
-            //   3. Do NOT clear shields — the app will call stopBlocking()
-            //      after the user confirms surrender.
-            NSLog("[NiyahShieldAction] Surrender tapped — setting flag, keeping shields active")
-            sharedDefaults.set(true, forKey: Self.surrenderKey)
+            // Two-step surrender (Lane B5):
+            //   1. Flip the pending flag so the app knows a confirm is in-flight.
+            //   2. Schedule a local push titled "Confirm surrender" with
+            //      category SURRENDER_CONFIRM. The user must tap the push to
+            //      deep-link into /session/active?confirmSurrender=true.
+            //   3. Do NOT auto-open the app and do NOT clear the shield.
+            //   4. If push scheduling fails (permission revoked, etc.), fall
+            //      back to the legacy auto-open flow so the user is never
+            //      stranded with no way to surrender.
+            NSLog("[NiyahShieldAction] Surrender tapped — flipping pending flag, scheduling confirm push")
+            sharedDefaults.set(true, forKey: Self.pendingSurrenderKey)
             sharedDefaults.synchronize()
-            openMainApp(urlString: "niyah://surrender")
-            completionHandler(.close)
+            scheduleSurrenderConfirmPush { [self] scheduled in
+                if !scheduled {
+                    NSLog("[NiyahShieldAction] Push schedule failed — falling back to legacy auto-open")
+                    sharedDefaults.set(true, forKey: Self.surrenderKey)
+                    sharedDefaults.synchronize()
+                    openMainApp(urlString: "niyah://surrender")
+                }
+                completionHandler(.close)
+            }
+            return
 
         @unknown default:
             completionHandler(.close)
+        }
+    }
+
+    /// Schedules a local notification asking the user to confirm surrender.
+    /// The category SURRENDER_CONFIRM is registered by the main app on launch
+    /// so the system shows a "Confirm forfeit" action button on the push.
+    private func scheduleSurrenderConfirmPush(completion: @escaping (Bool) -> Void) {
+        let content = UNMutableNotificationContent()
+        content.title = "Confirm surrender"
+        content.body = "Tap to forfeit your stake. This cannot be undone."
+        content.sound = .default
+        content.categoryIdentifier = Self.surrenderCategoryID
+        content.userInfo = ["type": "surrender_confirm_pending"]
+
+        // Tiny delay so iOS reliably delivers the push after the shield closes.
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.5, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: Self.surrenderPushID,
+            content: content,
+            trigger: trigger
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                NSLog("[NiyahShieldAction] Failed to schedule confirm push: \(error.localizedDescription)")
+                completion(false)
+            } else {
+                completion(true)
+            }
         }
     }
 

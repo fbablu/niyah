@@ -30,9 +30,23 @@ import {
   arrayUnion,
   arrayRemove,
 } from "@react-native-firebase/firestore";
-import { Alert, Platform } from "react-native";
+import { Platform } from "react-native";
 import { router, type RelativePathString } from "expo-router";
+import notifee, { AndroidImportance, EventType } from "@notifee/react-native";
 import { logger } from "../utils/logger";
+
+const NOTIFEE_CHANNEL_ID = "niyah-default";
+let notifeeChannelCreated = false;
+
+async function ensureNotifeeChannel(): Promise<void> {
+  if (notifeeChannelCreated || Platform.OS !== "android") return;
+  await notifee.createChannel({
+    id: NOTIFEE_CHANNEL_ID,
+    name: "Niyah Notifications",
+    importance: AndroidImportance.HIGH,
+  });
+  notifeeChannelCreated = true;
+}
 
 const db = getFirestore();
 
@@ -205,22 +219,49 @@ function handleNotificationNavigation(
   }
 }
 
-/** Set up foreground message handler — shows in-app alert. */
+/** Set up foreground message handler — displays a system-style banner via notifee. */
 export function setupForegroundHandler(): () => void {
-  return subscribeToMessages(getMessagingInstance(), async (remoteMessage) => {
-    const { notification, data } = remoteMessage;
-    if (!notification) return;
+  // Apple "critical alert" level requires a special entitlement reserved for
+  // health/safety apps. timeSensitive bypasses Focus modes without that gate.
+  const unsubMessages = subscribeToMessages(
+    getMessagingInstance(),
+    async (remoteMessage) => {
+      const { notification, data } = remoteMessage;
+      if (!notification) return;
 
-    // Show in-app alert for foreground messages
-    Alert.alert(notification.title || "Niyah", notification.body || "", [
-      { text: "Dismiss", style: "cancel" },
-      {
-        text: "View",
-        onPress: () =>
-          handleNotificationNavigation(data as Record<string, string>),
-      },
-    ]);
+      await ensureNotifeeChannel();
+      const payload = (data ?? {}) as Record<string, string>;
+
+      await notifee.displayNotification({
+        title: notification.title || "Niyah",
+        body: notification.body || "",
+        data: payload,
+        android: {
+          channelId: NOTIFEE_CHANNEL_ID,
+          pressAction: { id: "default" },
+          smallIcon: "ic_notification",
+        },
+        ios: {
+          sound: "default",
+          interruptionLevel: "timeSensitive",
+          categoryId: payload.type,
+        },
+      });
+    },
+  );
+
+  const unsubTap = notifee.onForegroundEvent(({ type, detail }) => {
+    if (type !== EventType.PRESS) return;
+    const data = detail.notification?.data as
+      | Record<string, string>
+      | undefined;
+    handleNotificationNavigation(data);
   });
+
+  return () => {
+    unsubMessages();
+    unsubTap();
+  };
 }
 
 /** Set up background message handler. Must be called at app entry point. */
@@ -229,6 +270,18 @@ export function setupBackgroundHandler(): void {
     logger.info("Background message received:", remoteMessage.messageId);
     // Background messages are handled by the system notification tray.
     // Navigation happens via onNotificationOpenedApp when user taps.
+  });
+
+  // Local notifications (e.g. the SURRENDER_CONFIRM push scheduled by
+  // ShieldActionExtension) bypass FCM and arrive through notifee. Register
+  // the background tap handler here at module load so taps from outside the
+  // app deep-link correctly even on cold start.
+  notifee.onBackgroundEvent(async ({ type, detail }) => {
+    if (type !== EventType.PRESS) return;
+    const data = detail.notification?.data as
+      | Record<string, string>
+      | undefined;
+    handleNotificationNavigation(data);
   });
 }
 

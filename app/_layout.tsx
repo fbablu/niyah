@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Text, TextInput, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as Linking from "expo-linking";
 import * as SecureStore from "expo-secure-store";
 import { BaseFontFamily } from "../src/constants/colors";
@@ -182,40 +183,42 @@ export default function RootLayout() {
         <GestureHandlerRootView
           style={{ flex: 1, backgroundColor: Colors.background }}
         >
-          <StatusBar style={theme === "dark" ? "light" : "dark"} />
-          <StatusBannerHost />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: Colors.background },
-              animation: "slide_from_right",
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen
-              name="session"
-              options={{
+          <KeyboardProvider>
+            <StatusBar style={theme === "dark" ? "light" : "dark"} />
+            <StatusBannerHost />
+            <Stack
+              screenOptions={{
                 headerShown: false,
-                presentation: "fullScreenModal",
-              }}
-            />
-            <Stack.Screen
-              name="invite"
-              options={{
-                headerShown: false,
-                animation: "slide_from_bottom",
-              }}
-            />
-            <Stack.Screen
-              name="user/[uid]"
-              options={{
-                headerShown: false,
+                contentStyle: { backgroundColor: Colors.background },
                 animation: "slide_from_right",
               }}
-            />
-          </Stack>
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="session"
+                options={{
+                  headerShown: false,
+                  presentation: "fullScreenModal",
+                }}
+              />
+              <Stack.Screen
+                name="invite"
+                options={{
+                  headerShown: false,
+                  animation: "slide_from_bottom",
+                }}
+              />
+              <Stack.Screen
+                name="user/[uid]"
+                options={{
+                  headerShown: false,
+                  animation: "slide_from_right",
+                }}
+              />
+            </Stack>
+          </KeyboardProvider>
         </GestureHandlerRootView>
       </StripeWrapper>
     </ErrorBoundary>

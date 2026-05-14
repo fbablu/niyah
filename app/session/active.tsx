@@ -41,7 +41,10 @@ type SessionMode = "solo_quick" | "solo_scheduled" | "solo_staked" | "group";
 
 function ActiveSessionScreenInner() {
   const Colors = useColors();
-  const params = useLocalSearchParams<{ mode?: SessionMode }>();
+  const params = useLocalSearchParams<{
+    mode?: SessionMode;
+    confirmSurrender?: string;
+  }>();
   const mode: SessionMode = params.mode ?? "group";
   const isSoloStaked = mode === "solo_staked";
   const styles = useMemo(
@@ -267,6 +270,16 @@ function ActiveSessionScreenInner() {
   const isNavigatingAwayRef = useRef(false);
   const [violationCount, setViolationCount] = useState(0);
   const [surrenderModalVisible, setSurrenderModalVisible] = useState(false);
+
+  // Two-step shield surrender (Lane B5): shield extension fires a push with
+  // category SURRENDER_CONFIRM. Tapping the push deep-links here with
+  // confirmSurrender=true; we open the hold-to-forfeit modal immediately so
+  // the user always confirms intentionally before money moves.
+  useEffect(() => {
+    if (params.confirmSurrender === "true") {
+      setSurrenderModalVisible(true);
+    }
+  }, [params.confirmSurrender]);
 
   // Only use activeSession if it's currently running. A stale completed/cancelled
   // session must not poison derived values — especially sessionEndsAtMs, which

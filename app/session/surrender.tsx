@@ -7,9 +7,9 @@ import {
   Pressable,
   Linking,
   Alert,
-  KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useRouter } from "expo-router";
 import {
   Typography,

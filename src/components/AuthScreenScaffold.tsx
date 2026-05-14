@@ -1,13 +1,9 @@
 import React, { useMemo } from "react";
+import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
 import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
   KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-} from "react-native";
+  KeyboardAwareScrollView,
+} from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import {
@@ -85,18 +81,23 @@ export const AuthScreenScaffold: React.FC<AuthScreenScaffoldProps> = ({
     </>
   );
 
-  const content = scrollable ? (
-    <ScrollView
-      style={styles.flex}
-      contentContainerStyle={styles.scrollContent}
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
-      {innerContent}
-    </ScrollView>
-  ) : (
-    <View style={styles.content}>{innerContent}</View>
-  );
+  if (scrollable) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <KeyboardAwareScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bottomOffset={20}
+        >
+          {innerContent}
+        </KeyboardAwareScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  const content = <View style={styles.content}>{innerContent}</View>;
 
   return (
     <SafeAreaView style={styles.container}>
