@@ -12,7 +12,7 @@ import React, {
   useRef,
 } from "react";
 import { View, Text, StyleSheet, Alert, ActivityIndicator } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import {
   create,
   open,
@@ -38,6 +38,7 @@ import { useAuthStore } from "../../src/store/authStore";
 import {
   createPlaidLinkToken,
   linkBankAccount,
+  replaceBankAccount,
 } from "../../src/config/functions";
 import { logger } from "../../src/utils/logger";
 import { getFunctionErrorMessage } from "../../src/utils/errors";
@@ -47,6 +48,8 @@ function BankSetupScreenInner() {
   const Colors = useColors();
   const styles = useMemo(() => makeStyles(Colors), [Colors]);
   const router = useRouter();
+  const params = useLocalSearchParams<{ replace?: string }>();
+  const isReplaceMode = params.replace === "true";
   const { user, updateUser } = useAuthStore();
 
   const [isConnecting, setIsConnecting] = useState(false);
@@ -106,8 +109,13 @@ function BankSetupScreenInner() {
               return;
             }
 
-            // 4. Send to server — exchanges token, creates Stripe account, links bank
-            const result = await linkBankAccount(publicToken, plaidAccountId);
+            // 4. Send to server — exchanges token, creates Stripe account, links bank.
+            // Replace mode (deep-linked from Profile → Manage → Replace) swaps
+            // the bank in a single transaction so the old one is only detached
+            // after the new one validates.
+            const result = isReplaceMode
+              ? await replaceBankAccount(publicToken, plaidAccountId)
+              : await linkBankAccount(publicToken, plaidAccountId);
 
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -160,7 +168,7 @@ function BankSetupScreenInner() {
       );
       if (isMountedRef.current) setIsConnecting(false);
     }
-  }, [updateUser, safeBack]);
+  }, [updateUser, safeBack, isReplaceMode]);
 
   const isLoading = isConnecting || isLinking;
 

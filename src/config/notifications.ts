@@ -182,6 +182,24 @@ function handleNotificationNavigation(
     case "session_complete":
       router.push("/session/complete");
       break;
+    // In-session pushes — they're informational; keep the user on the
+    // active screen instead of forcing a navigation. Tapping the banner
+    // still routes there in case the app was backgrounded.
+    case "member_app_opened":
+    case "leaderboard_shift":
+    case "session_progress_25":
+    case "session_progress_50":
+    case "session_progress_75":
+    case "shield_violation":
+      router.push("/session/active");
+      break;
+    // Two-step shield surrender (Lane B5): tapping the push opens the
+    // active session with a query param so the confirm sheet renders.
+    case "surrender_confirm_pending":
+      router.push(
+        "/session/active?confirmSurrender=true" as RelativePathString,
+      );
+      break;
     default:
       break;
   }

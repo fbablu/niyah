@@ -20,12 +20,30 @@ import {
 } from "plaid";
 import type { Response } from "express";
 import {
+  authUsersShareVerifiedContact,
   buildStoredPayouts,
   calculateGroupSessionPayouts,
   calculateReferralReputation,
+  compareAdminKey,
+  decideAccountMerge,
   decideReferralClaim,
+  evaluateAppCheckToken,
   isValidFirebaseUid,
+  type MinimalAuthRecord,
 } from "./security";
+
+/**
+ * Per-environment App Check enforcement. Off by default during rollout so
+ * pre-AppAttest TestFlight builds and emulator suites don't get 403s. Flip
+ * `APP_CHECK_ENFORCED=true` once Firebase Console → App Check metrics show
+ * ≥99% verified production traffic.
+ */
+const APP_CHECK_ENFORCED = process.env.APP_CHECK_ENFORCED === "true";
+
+/** Test seam: lets unit tests assert the env-flag wiring without spawning a deploy. */
+export function isAppCheckEnforced(): boolean {
+  return APP_CHECK_ENFORCED;
+}
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -90,8 +108,35 @@ function getPlaid(): PlaidApi {
   return new PlaidApi(config);
 }
 
+/**
+ * App-Check enforcement gate. Verified attestation tokens come from
+ * `getAppCheckToken()` on the client; absent or invalid tokens reject with
+ * 403. "skip-dev" is reserved for dev/CI fixtures and is rejected — prod
+ * must never accept it.
+ *
+ * Whether this gate runs at all is controlled by `APP_CHECK_ENFORCED`. When
+ * false (default during rollout) `verifyAuth` only logs missing tokens via
+ * the existing soft-fail path so pre-AppAttest builds keep working.
+ */
+async function assertAppCheck(req: Request): Promise<void> {
+  await evaluateAppCheckToken(
+    req.headers["x-firebase-appcheck"],
+    async (t) => {
+      await admin.appCheck().verifyToken(t);
+    },
+  );
+}
+
+interface VerifyAuthOptions {
+  /** When true, reject calls without a verified App Check token. */
+  enforceAppCheck?: boolean;
+}
+
 /** Verify Firebase ID token from Authorization header. Returns uid or throws. */
-async function verifyAuth(req: Request): Promise<string> {
+async function verifyAuth(
+  req: Request,
+  opts: VerifyAuthOptions = {},
+): Promise<string> {
   const authHeader = req.headers.authorization;
   const token =
     typeof authHeader === "string" && authHeader.startsWith("Bearer ")
@@ -102,14 +147,24 @@ async function verifyAuth(req: Request): Promise<string> {
 
   const decoded = await admin.auth().verifyIdToken(token);
 
-  // App Check soft-enforcement: log whether the call included an attestation
-  // token. After campus launch validates tokens flow in from real clients we
-  // flip Firebase Console to "Enforced" mode so unattested calls get rejected.
-  const appCheckToken = req.headers["x-firebase-appcheck"];
-  if (!appCheckToken) {
-    console.warn(
-      `app_check_missing uid=${decoded.uid} path=${req.path ?? "?"}`,
-    );
+  // App Check: hard-enforce on auth-gated money paths, soft-log everywhere
+  // else during the rollout window.
+  if (opts.enforceAppCheck) {
+    try {
+      await assertAppCheck(req);
+    } catch (err) {
+      console.warn(
+        `app_check_enforced_reject uid=${decoded.uid} path=${req.path ?? "?"}`,
+      );
+      throw err;
+    }
+  } else {
+    const appCheckToken = req.headers["x-firebase-appcheck"];
+    if (!appCheckToken) {
+      console.warn(
+        `app_check_missing uid=${decoded.uid} path=${req.path ?? "?"}`,
+      );
+    }
   }
 
   return decoded.uid;
@@ -117,6 +172,23 @@ async function verifyAuth(req: Request): Promise<string> {
 
 function sendError(res: Response, code: number, message: string): void {
   res.status(code).json({ error: message });
+}
+
+/**
+ * Structured breadcrumb logger for money paths. Emits a single line of JSON
+ * that Cloud Logging captures and that a future Sentry @sentry/node init can
+ * pick up via console hook. Keeps payout, withdrawal, and bank link calls
+ * forensically traceable across retries and failures.
+ */
+function payoutBreadcrumb(
+  flow: "linkBankAccount" | "requestWithdrawal" | "distributeGroupPayouts",
+  step: string,
+  ctx: Record<string, string | number | boolean | undefined>,
+): void {
+  const safe = Object.fromEntries(
+    Object.entries(ctx).filter(([, v]) => v !== undefined),
+  );
+  console.info(JSON.stringify({ breadcrumb: flow, step, ...safe }));
 }
 
 // Per-user daily stake cap (cents). Overridable via env for gradual lift
@@ -548,6 +620,9 @@ const RATE_LIMITS = {
   cancelGroupSession: { maxCalls: 5, windowMs: 3_600_000 }, // 5/hr
   createPlaidLinkToken: { maxCalls: 10, windowMs: 600_000 }, // 10/10min
   linkBankAccount: { maxCalls: 5, windowMs: 3_600_000 }, // 5/hr
+  unlinkBankAccount: { maxCalls: 5, windowMs: 3_600_000 }, // 5/hr
+  replaceBankAccount: { maxCalls: 5, windowMs: 3_600_000 }, // 5/hr
+  requestAccountMerge: { maxCalls: 10, windowMs: 3_600_000 }, // 10/hr — runs on every fresh sign-in
   findContactsOnNiyah: { maxCalls: 3, windowMs: 86_400_000 }, // 3/day — prevent phone enumeration
 } as const;
 
@@ -1219,9 +1294,14 @@ export const createPlaidLinkToken = onRequest(
 
     let uid: string;
     try {
-      uid = await verifyAuth(req);
-    } catch {
-      sendError(res, 401, "Unauthorized");
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("App Check")) {
+        sendError(res, 403, "App Check attestation required");
+      } else {
+        sendError(res, 401, "Unauthorized");
+      }
       return;
     }
 
@@ -1282,9 +1362,14 @@ export const linkBankAccount = onRequest(
 
     let uid: string;
     try {
-      uid = await verifyAuth(req);
-    } catch {
-      sendError(res, 401, "Unauthorized");
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("App Check")) {
+        sendError(res, 403, "App Check attestation required");
+      } else {
+        sendError(res, 401, "Unauthorized");
+      }
       return;
     }
 
@@ -1330,6 +1415,8 @@ export const linkBankAccount = onRequest(
         return;
       }
 
+      payoutBreadcrumb("linkBankAccount", "entry", { uid });
+
       // 1. Exchange public_token → access_token (server-side only)
       let accessToken: string;
       let itemId: string;
@@ -1341,9 +1428,11 @@ export const linkBankAccount = onRequest(
         itemId = exchangeResponse.data.item_id;
       } catch (err) {
         console.error("linkBankAccount step 1 (token exchange) failed:", err);
+        payoutBreadcrumb("linkBankAccount", "token_exchange_failed", { uid });
         sendError(res, 500, "Failed to exchange Plaid token");
         return;
       }
+      payoutBreadcrumb("linkBankAccount", "token_exchanged", { uid, itemId });
 
       // 2. Get account details for display (mask, institution name)
       let bankMask = "****";
@@ -1467,6 +1556,11 @@ export const linkBankAccount = onRequest(
         }
       }
 
+      payoutBreadcrumb("linkBankAccount", "stripe_bank_attached", {
+        uid,
+        stripeAccountId,
+      });
+
       // 6. Store everything in Firestore (access_token server-side only)
       await userRef.update({
         stripeAccountId: stripeAccountId,
@@ -1482,6 +1576,7 @@ export const linkBankAccount = onRequest(
         },
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+      payoutBreadcrumb("linkBankAccount", "firestore_committed", { uid });
 
       res.json({
         success: true,
@@ -1492,6 +1587,340 @@ export const linkBankAccount = onRequest(
       console.error("linkBankAccount unexpected error:", err);
       const message =
         err instanceof Error ? err.message : "Failed to link bank account";
+      sendError(res, 500, message);
+    }
+  },
+);
+
+// ─── unlinkBankAccount ──────────────────────────────────────────────────────
+/**
+ * Removes the user's linked bank. Detaches every external account from the
+ * Stripe Connect account, invalidates the Plaid item, and clears the
+ * `linkedBank` + Plaid-token fields on the user doc. Idempotent — a second
+ * call on an already-unlinked user is a no-op success.
+ *
+ * The Stripe connected account itself stays intact so a later
+ * `linkBankAccount` can reuse it. `stripeAccountStatus` flips to "pending"
+ * to communicate that withdrawals are disabled until a new bank is attached.
+ */
+export const unlinkBankAccount = onRequest(
+  PUBLIC_PLAID_STRIPE_HTTP_OPTIONS,
+  async (req, res) => {
+    if (req.method !== "POST") {
+      sendError(res, 405, "Method not allowed");
+      return;
+    }
+
+    let uid: string;
+    try {
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      sendError(
+        res,
+        msg.includes("App Check") ? 403 : 401,
+        msg.includes("App Check") ? "App Check attestation required" : "Unauthorized",
+      );
+      return;
+    }
+
+    if (
+      await checkRateLimit(
+        uid,
+        "unlinkBankAccount",
+        RATE_LIMITS.unlinkBankAccount,
+      )
+    ) {
+      sendError(res, 429, "Too many requests — try again later");
+      return;
+    }
+
+    try {
+      console.info(`unlinkBankAccount start uid=${uid}`);
+      await unlinkBankInternal(uid);
+      console.info(`unlinkBankAccount complete uid=${uid}`);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("unlinkBankAccount error:", err);
+      const message =
+        err instanceof Error ? err.message : "Failed to unlink bank";
+      sendError(res, 500, message);
+    }
+  },
+);
+
+/**
+ * Shared unlink path used by both `unlinkBankAccount` and `replaceBankAccount`.
+ * Best-effort: each external system call is wrapped so a Plaid outage does not
+ * leave Firestore inconsistent. Stripe detach failures are logged but the
+ * Firestore-side clear still runs so the user can re-link.
+ */
+async function unlinkBankInternal(uid: string): Promise<void> {
+  const stripe = getStripe();
+  const plaid = getPlaid();
+  const userRef = db.collection("users").doc(uid);
+  const userSnap = await userRef.get();
+  if (!userSnap.exists) return;
+  const userData = userSnap.data() ?? {};
+
+  const stripeAccountId =
+    typeof userData.stripeAccountId === "string"
+      ? userData.stripeAccountId
+      : undefined;
+  const plaidAccessToken =
+    typeof userData.plaidAccessToken === "string"
+      ? userData.plaidAccessToken
+      : undefined;
+
+  // Detach all external accounts attached to the Stripe Connect account.
+  if (stripeAccountId) {
+    try {
+      const externalAccounts = await stripe.accounts.listExternalAccounts(
+        stripeAccountId,
+        { object: "bank_account", limit: 10 },
+      );
+      for (const ext of externalAccounts.data) {
+        try {
+          await stripe.accounts.deleteExternalAccount(stripeAccountId, ext.id);
+          console.info(
+            `unlinkBankInternal: detached stripe external ${ext.id} from ${stripeAccountId}`,
+          );
+        } catch (detachErr) {
+          console.warn(
+            `unlinkBankInternal: failed to detach ${ext.id}:`,
+            detachErr,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("unlinkBankInternal: listExternalAccounts failed:", err);
+    }
+  }
+
+  // Invalidate Plaid access token so it cannot be reused. /item/remove is
+  // best-effort — if it fails, the token has at most a 30-day lifetime anyway.
+  if (plaidAccessToken) {
+    try {
+      await plaid.itemRemove({ access_token: plaidAccessToken });
+      console.info(`unlinkBankInternal: plaid item removed for uid=${uid}`);
+    } catch (err) {
+      console.warn("unlinkBankInternal: plaid.itemRemove failed:", err);
+    }
+  }
+
+  await userRef.update({
+    linkedBank: admin.firestore.FieldValue.delete(),
+    plaidAccessToken: admin.firestore.FieldValue.delete(),
+    plaidItemId: admin.firestore.FieldValue.delete(),
+    plaidAccountId: admin.firestore.FieldValue.delete(),
+    stripeAccountStatus: stripeAccountId ? "pending" : undefined,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+// ─── replaceBankAccount ─────────────────────────────────────────────────────
+/**
+ * Atomically swaps the linked bank. Validates and attaches the new bank
+ * first; only then detaches the old one and clears its Plaid token. If the
+ * new attach fails, the old bank is left untouched — no halfway state.
+ *
+ * Body: { publicToken: string, accountId: string }
+ * Returns: { success: true, bankName, bankMask } on success.
+ */
+export const replaceBankAccount = onRequest(
+  PUBLIC_PLAID_STRIPE_HTTP_OPTIONS,
+  async (req, res) => {
+    if (req.method !== "POST") {
+      sendError(res, 405, "Method not allowed");
+      return;
+    }
+
+    let uid: string;
+    try {
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      sendError(
+        res,
+        msg.includes("App Check") ? 403 : 401,
+        msg.includes("App Check") ? "App Check attestation required" : "Unauthorized",
+      );
+      return;
+    }
+
+    if (
+      await checkRateLimit(
+        uid,
+        "replaceBankAccount",
+        RATE_LIMITS.replaceBankAccount,
+      )
+    ) {
+      sendError(res, 429, "Too many requests — try again later");
+      return;
+    }
+
+    const { publicToken, accountId } = req.body as {
+      publicToken: unknown;
+      accountId: unknown;
+    };
+    if (typeof publicToken !== "string" || !publicToken) {
+      sendError(res, 400, "Missing publicToken");
+      return;
+    }
+    if (typeof accountId !== "string" || !accountId) {
+      sendError(res, 400, "Missing accountId");
+      return;
+    }
+
+    const plaid = getPlaid();
+    const stripe = getStripe();
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    const userData = userSnap.data() ?? {};
+
+    const oldStripeAccountId =
+      typeof userData.stripeAccountId === "string"
+        ? userData.stripeAccountId
+        : "";
+    const oldPlaidAccessToken =
+      typeof userData.plaidAccessToken === "string"
+        ? userData.plaidAccessToken
+        : undefined;
+
+    try {
+      console.info(`replaceBankAccount start uid=${uid}`);
+
+      // 1. Validate new public_token by exchanging it.
+      const exchange = await plaid.itemPublicTokenExchange({
+        public_token: publicToken,
+      });
+      const newAccessToken = exchange.data.access_token;
+      const newItemId = exchange.data.item_id;
+
+      // 2. Fetch metadata for the new account.
+      let bankMask = "****";
+      let bankName = "Bank Account";
+      let institutionName = "Bank";
+      try {
+        const accountsResponse = await plaid.accountsGet({
+          access_token: newAccessToken,
+        });
+        const linkedAccount = accountsResponse.data.accounts.find(
+          (a) => a.account_id === accountId,
+        );
+        bankMask = linkedAccount?.mask ?? "****";
+        bankName = linkedAccount?.name ?? "Bank Account";
+        const itemResponse = await plaid.itemGet({
+          access_token: newAccessToken,
+        });
+        const institutionId = itemResponse.data.item.institution_id;
+        if (institutionId) {
+          try {
+            const instResponse = await plaid.institutionsGetById({
+              institution_id: institutionId,
+              country_codes: [CountryCode.Us],
+            });
+            institutionName = instResponse.data.institution.name;
+          } catch {
+            // Non-critical
+          }
+        }
+      } catch (err) {
+        console.warn("replaceBankAccount: account metadata fetch failed:", err);
+      }
+
+      // 3. Generate Stripe processor token.
+      const processorResponse =
+        await plaid.processorStripeBankAccountTokenCreate({
+          access_token: newAccessToken,
+          account_id: accountId,
+        });
+      const stripeBankToken = processorResponse.data.stripe_bank_account_token;
+
+      // 4. Ensure we have a Stripe connect account.
+      let stripeAccountId = oldStripeAccountId;
+      if (!stripeAccountId) {
+        const validEmail =
+          typeof userData.email === "string" && userData.email.includes("@")
+            ? userData.email
+            : undefined;
+        const account = await stripe.accounts.create({
+          type: "express",
+          country: "US",
+          ...(validEmail ? { email: validEmail } : {}),
+          capabilities: { transfers: { requested: true } },
+          metadata: { firebaseUid: uid },
+        });
+        stripeAccountId = account.id;
+      }
+
+      // 5. Attach new bank — this is the gate. If it fails, the old bank
+      //    stays. We do NOT detach yet.
+      await stripe.accounts.createExternalAccount(stripeAccountId, {
+        external_account: stripeBankToken,
+        default_for_currency: true,
+      });
+
+      // 6. New bank attached. Detach old external accounts (best-effort).
+      try {
+        const existing = await stripe.accounts.listExternalAccounts(
+          stripeAccountId,
+          { object: "bank_account", limit: 10 },
+        );
+        for (const ext of existing.data) {
+          // Skip the one we just attached (default_for_currency is now this one)
+          if (ext.default_for_currency) continue;
+          try {
+            await stripe.accounts.deleteExternalAccount(
+              stripeAccountId,
+              ext.id,
+            );
+          } catch (detachErr) {
+            console.warn(
+              `replaceBankAccount: failed to detach old ext ${ext.id}:`,
+              detachErr,
+            );
+          }
+        }
+      } catch (err) {
+        console.warn("replaceBankAccount: cleanup of old externals failed:", err);
+      }
+
+      // 7. Update Firestore with new bank info.
+      await userRef.update({
+        stripeAccountId,
+        stripeAccountStatus: "active",
+        plaidAccessToken: newAccessToken,
+        plaidItemId: newItemId,
+        plaidAccountId: accountId,
+        linkedBank: {
+          institutionName,
+          bankName,
+          mask: bankMask,
+          linkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // 8. Invalidate the old Plaid item. Best-effort, post-commit.
+      if (oldPlaidAccessToken && oldPlaidAccessToken !== newAccessToken) {
+        try {
+          await plaid.itemRemove({ access_token: oldPlaidAccessToken });
+        } catch (err) {
+          console.warn("replaceBankAccount: old plaid.itemRemove failed:", err);
+        }
+      }
+
+      console.info(`replaceBankAccount complete uid=${uid}`);
+      res.json({
+        success: true,
+        bankName: institutionName,
+        bankMask,
+      });
+    } catch (err) {
+      console.error("replaceBankAccount unexpected error:", err);
+      const message =
+        err instanceof Error ? err.message : "Failed to replace bank";
       sendError(res, 500, message);
     }
   },
@@ -1895,9 +2324,14 @@ export const requestWithdrawal = onRequest(
 
     let uid: string;
     try {
-      uid = await verifyAuth(req);
-    } catch {
-      sendError(res, 401, "Unauthorized");
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("App Check")) {
+        sendError(res, 403, "App Check attestation required");
+      } else {
+        sendError(res, 401, "Unauthorized");
+      }
       return;
     }
 
@@ -2077,12 +2511,34 @@ export const requestWithdrawal = onRequest(
         return;
       }
 
-      // Transfer from Niyah's platform account → user's connected account
-      const transfer = await stripe.transfers.create({
+      payoutBreadcrumb("requestWithdrawal", "wallet_debited", {
+        uid,
         amount,
-        currency: "usd",
-        destination: connectedAccountId,
-        metadata: { firebaseUid: uid, type: "withdrawal", method },
+        method,
+        txnId: txnRef.id,
+      });
+
+      // Transfer from Niyah's platform account → user's connected account.
+      // Idempotency key collapses retries within the same minute on the same
+      // (user, amount, method) so a flaky network can't trigger duplicate
+      // transfers — Stripe will return the original transfer instead of
+      // creating a new one.
+      const idemBucket = Math.floor(Date.now() / 60_000);
+      const idempotencyKey = `withdrawal:${uid}:${amount}:${method}:${idemBucket}`;
+      const transfer = await stripe.transfers.create(
+        {
+          amount,
+          currency: "usd",
+          destination: connectedAccountId,
+          metadata: { firebaseUid: uid, type: "withdrawal", method },
+        },
+        { idempotencyKey },
+      );
+      payoutBreadcrumb("requestWithdrawal", "stripe_transfer_created", {
+        uid,
+        amount,
+        transferId: transfer.id,
+        idempotencyKey,
       });
 
       // Update transaction with transfer ID
@@ -2188,6 +2644,8 @@ export const distributeGroupPayouts = onRequest(
       return;
     }
 
+    payoutBreadcrumb("distributeGroupPayouts", "entry", { uid, sessionId });
+
     try {
       const sessionRef = db.collection("groupSessions").doc(sessionId);
       const sessionSnap = await sessionRef.get();
@@ -2203,6 +2661,11 @@ export const distributeGroupPayouts = onRequest(
         sendError(res, 403, "Only the proposer can reconcile payouts");
         return;
       }
+      payoutBreadcrumb("distributeGroupPayouts", "session_loaded", {
+        uid,
+        sessionId,
+        status: typeof sessionData.status === "string" ? sessionData.status : "",
+      });
 
       if (sessionData.status !== "completed") {
         sendError(
@@ -2234,11 +2697,22 @@ export const distributeGroupPayouts = onRequest(
       }
 
       const serverPayouts = buildStoredPayouts(participantIds, rawPayouts);
+      payoutBreadcrumb("distributeGroupPayouts", "before_settle", {
+        uid,
+        sessionId,
+        payoutCount: serverPayouts.length,
+        poolCents: serverPayouts.reduce((acc, p) => acc + p.amount, 0),
+      });
       const transferIds = await settleGroupSessionPayouts(
         sessionId,
         serverPayouts,
         uid,
       );
+      payoutBreadcrumb("distributeGroupPayouts", "settle_complete", {
+        uid,
+        sessionId,
+        transferCount: transferIds.length,
+      });
 
       res.json({
         success: true,
@@ -2247,6 +2721,11 @@ export const distributeGroupPayouts = onRequest(
       });
     } catch (err) {
       console.error("distributeGroupPayouts error:", err);
+      payoutBreadcrumb("distributeGroupPayouts", "error", {
+        uid,
+        sessionId,
+        message: err instanceof Error ? err.message : "unknown",
+      });
       sendError(res, 500, "Failed to distribute payouts");
     }
   },
@@ -2785,9 +3264,14 @@ export const createGroupSession = onRequest(
 
     let uid: string;
     try {
-      uid = await verifyAuth(req);
-    } catch {
-      sendError(res, 401, "Unauthorized");
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("App Check")) {
+        sendError(res, 403, "App Check attestation required");
+      } else {
+        sendError(res, 401, "Unauthorized");
+      }
       return;
     }
 
@@ -3661,20 +4145,61 @@ export const reportSessionStatus = onRequest(
       });
 
       if (!outcome.sessionComplete) {
-        // Notify other participants when someone gives up mid-session
+        // Notify other participants when someone gives up mid-session.
+        // Two pushes go out: the legacy `session_surrender` for clients that
+        // route on that key, plus the richer `leaderboard_shift` so the new
+        // banner shows the updated per-share estimate.
         if (
           action === "surrender" &&
           outcome.participantIds &&
           outcome.actorName
         ) {
+          const survivors = outcome.participantIds.filter(
+            (pid: string) => pid !== uid,
+          );
           sendPushToUsers(
-            outcome.participantIds.filter((pid: string) => pid !== uid),
+            survivors,
             {
               title: `${outcome.actorName} tapped out 💸`,
               body: "Their stake just got split between everyone still locked in.",
             },
             { type: "session_surrender", sessionId },
           );
+          try {
+            const refreshed = await sessionRef.get();
+            const refreshedData = refreshed.data() ?? {};
+            const totalParticipants = Array.isArray(refreshedData.participantIds)
+              ? refreshedData.participantIds.length
+              : 0;
+            const remaining = totalParticipants
+              ? Object.values(
+                  refreshedData.participants as Record<string, { surrendered?: boolean }>,
+                ).filter((p) => !p?.surrendered).length
+              : 0;
+            const stake =
+              typeof refreshedData.stakePerParticipant === "number"
+                ? refreshedData.stakePerParticipant
+                : 0;
+            const newShareCents =
+              remaining > 0
+                ? Math.floor((totalParticipants * stake) / remaining)
+                : 0;
+            sendPushToUsers(
+              survivors,
+              {
+                title: "Your share just grew",
+                body: `If you finish, you'd now take home about $${(newShareCents / 100).toFixed(2)}.`,
+              },
+              {
+                type: "leaderboard_shift",
+                sessionId,
+                actorName: outcome.actorName,
+                newShareCents: String(newShareCents),
+              },
+            );
+          } catch (err) {
+            console.warn("leaderboard_shift push failed (non-fatal):", err);
+          }
         }
         console.log(
           `reportSessionStatus: session=${sessionId}, user=${uid}, action=${action}, allReported=false`,
@@ -3836,15 +4361,23 @@ export const reportShieldViolation = onRequest(
         return { newCount, actorName, participantIds, shouldPush };
       });
 
-      // Notify other participants — 30s cooldown per user prevents spam
+      // Notify other participants — 30s cooldown per user prevents spam.
+      // Switched to `member_app_opened` so the client can render a per-app
+      // pill on the leaderboard rather than treating it as a generic event.
       if (result.shouldPush) {
         sendPushToUsers(
           result.participantIds.filter((pid: string) => pid !== uid),
           {
-            title: `${result.actorName} caved 👀`,
-            body: "They tried opening a blocked app. You're still in.",
+            title: `${result.actorName} opened a blocked app 👀`,
+            body: "They tapped through the shield. Their share is shrinking.",
           },
-          { type: "shield_violation", sessionId },
+          {
+            type: "member_app_opened",
+            sessionId,
+            actorUid: uid,
+            actorName: result.actorName,
+            violationCount: String(result.newCount),
+          },
         );
       }
 
@@ -4108,6 +4641,102 @@ export const autoTimeoutGroupSessions = onSchedule(
   },
 );
 
+// ─── sessionProgressNudges ──────────────────────────────────────────────────
+/**
+ * Scheduled every 5 minutes: scans active group sessions and emits
+ * `session_progress_25` / `_50` / `_75` push notifications when a session
+ * crosses each milestone. Fires once per milestone per session — the
+ * crossed thresholds are recorded on the session doc so a re-run won't
+ * spam users.
+ */
+export const sessionProgressNudges = onSchedule(
+  { schedule: "every 5 minutes", region: "us-central1" },
+  async () => {
+    const nowMs = Date.now();
+    try {
+      const activeSnap = await db
+        .collection("groupSessions")
+        .where("status", "==", "active")
+        .get();
+      if (activeSnap.empty) return;
+
+      for (const sessionDoc of activeSnap.docs) {
+        const sessionId = sessionDoc.id;
+        const data = sessionDoc.data();
+        const startedAt =
+          data.startedAt?.toMillis?.() ??
+          (typeof data.startedAt === "number" ? data.startedAt : undefined);
+        const duration =
+          typeof data.duration === "number" ? data.duration : undefined;
+        const participantIds: string[] = Array.isArray(data.participantIds)
+          ? data.participantIds.filter((p): p is string => typeof p === "string")
+          : [];
+        if (!startedAt || !duration || participantIds.length === 0) continue;
+
+        const elapsed = nowMs - startedAt;
+        const progress = elapsed / duration;
+        const milestones: number[] = [25, 50, 75];
+        const fired: number[] = Array.isArray(data.progressMilestonesFired)
+          ? (data.progressMilestonesFired as unknown[]).filter(
+              (m): m is number => typeof m === "number",
+            )
+          : [];
+
+        const toFire = milestones.filter(
+          (m) => progress >= m / 100 && !fired.includes(m),
+        );
+        if (toFire.length === 0) continue;
+
+        for (const milestone of toFire) {
+          try {
+            const remainingMs = Math.max(0, duration - elapsed);
+            const remainingMin = Math.ceil(remainingMs / 60_000);
+            const body =
+              milestone === 75
+                ? `Final stretch — ${remainingMin} min to lock in your payout.`
+                : milestone === 50
+                  ? `Halfway. ${remainingMin} min left to keep your stake alive.`
+                  : `Past the warmup. ${remainingMin} min left.`;
+            sendPushToUsers(
+              participantIds,
+              {
+                title: `${milestone}% done 💪`,
+                body,
+              },
+              {
+                type: `session_progress_${milestone}`,
+                sessionId,
+                milestone: String(milestone),
+              },
+            );
+          } catch (err) {
+            console.warn(
+              `sessionProgressNudges push for ${sessionId} m=${milestone} failed:`,
+              err,
+            );
+          }
+        }
+
+        try {
+          await sessionDoc.ref.update({
+            progressMilestonesFired: admin.firestore.FieldValue.arrayUnion(
+              ...toFire,
+            ),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch (err) {
+          console.warn(
+            `sessionProgressNudges: failed to record fired milestones for ${sessionId}:`,
+            err,
+          );
+        }
+      }
+    } catch (err) {
+      console.error("sessionProgressNudges error:", err);
+    }
+  },
+);
+
 // ─── Finals promo bonus ──────────────────────────────────────────────────────
 // Campus-launch promo: when a user crosses the same gate that unlocks
 // withdrawal (>=5 completed sessions + >=2 distinct group partners) they get
@@ -4288,3 +4917,551 @@ export const aggregateDailyMetrics = onSchedule(
     }
   },
 );
+
+// ─── Multi-provider account merge (admin-only) ──────────────────────────────
+
+const ADMIN_API_KEY = defineSecret("ADMIN_API_KEY");
+
+const PUBLIC_ADMIN_HTTP_OPTIONS = {
+  ...PUBLIC_HTTP_OPTIONS,
+  secrets: [ADMIN_API_KEY],
+};
+
+/**
+ * Server-side replacement for the previous client `findExistingUserByPhoneOrEmail`
+ * + `queuePendingMerge` pair. Detects a cross-provider duplicate using
+ * **only** auth-verified contact fields (Firebase auth's `phoneNumber` and
+ * verified `email`) — never the user-writable `users/{uid}.phone` or
+ * `.email` Firestore fields. Prevents phone-squat takeover where an
+ * attacker sets a victim's number on their own profile and waits for the
+ * victim to sign up.
+ *
+ * Body: none. Returns one of:
+ *   - { status: "no_match" }
+ *   - { status: "no_verified_contact" }   (caller has no verified phone/email)
+ *   - { status: "self_match" }            (only the caller matches)
+ *   - { status: "merge", role: "duplicate", canonicalUid, matchedField }
+ *   - { status: "merge", role: "canonical", duplicateUid, matchedField }
+ *
+ * Writes `userMerges/{newUid}` via admin SDK only when the caller is the
+ * duplicate (newer auth user) — never the canonical.
+ */
+export const requestAccountMerge = onRequest(
+  PUBLIC_HTTP_OPTIONS,
+  async (req, res) => {
+    if (req.method !== "POST") {
+      sendError(res, 405, "Method not allowed");
+      return;
+    }
+
+    let uid: string;
+    try {
+      uid = await verifyAuth(req, { enforceAppCheck: APP_CHECK_ENFORCED });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      sendError(
+        res,
+        msg.includes("App Check") ? 403 : 401,
+        msg.includes("App Check") ? "App Check attestation required" : "Unauthorized",
+      );
+      return;
+    }
+
+    if (
+      await checkRateLimit(
+        uid,
+        "requestAccountMerge",
+        RATE_LIMITS.requestAccountMerge,
+      )
+    ) {
+      sendError(res, 429, "Too many requests — try again later");
+      return;
+    }
+
+    try {
+      const callerAuth = await admin.auth().getUser(uid);
+      const verifiedPhone = callerAuth.phoneNumber ?? null;
+      const verifiedEmail =
+        callerAuth.emailVerified && callerAuth.email
+          ? callerAuth.email.toLowerCase()
+          : null;
+
+      if (!verifiedPhone && !verifiedEmail) {
+        res.json({ status: "no_verified_contact" });
+        return;
+      }
+
+      // Try phone first, then email. Auth admin SDK lookups don't surface
+      // unrelated users — only the one matching the contact (or none).
+      let candidate: admin.auth.UserRecord | null = null;
+      if (verifiedPhone) {
+        try {
+          const u = await admin.auth().getUserByPhoneNumber(verifiedPhone);
+          if (u.uid !== uid) candidate = u;
+        } catch {
+          // not found — fine
+        }
+      }
+      if (!candidate && verifiedEmail) {
+        try {
+          const u = await admin.auth().getUserByEmail(verifiedEmail);
+          if (u.uid !== uid && u.emailVerified) candidate = u;
+        } catch {
+          // not found — fine
+        }
+      }
+
+      if (!candidate) {
+        res.json({ status: "no_match" });
+        return;
+      }
+
+      const toMinimal = (
+        u: admin.auth.UserRecord,
+      ): MinimalAuthRecord => ({
+        uid: u.uid,
+        email: u.email ?? null,
+        emailVerified: u.emailVerified,
+        phoneNumber: u.phoneNumber ?? null,
+        metadata: { creationTime: u.metadata.creationTime },
+      });
+
+      const decision = decideAccountMerge(
+        toMinimal(callerAuth),
+        toMinimal(candidate),
+      );
+
+      if (decision.status !== "merge") {
+        res.json({ status: decision.status });
+        return;
+      }
+
+      // Only queue when the caller is the duplicate. If the caller is the
+      // canonical, the next sign-in by the duplicate will queue itself.
+      if (decision.newUid === uid) {
+        await db
+          .collection("userMerges")
+          .doc(uid)
+          .set(
+            {
+              newUid: decision.newUid,
+              existingUid: decision.existingUid,
+              matchedField: decision.matchedField,
+              status: "pending",
+              detectedByAuth: true,
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+        res.json({
+          status: "merge",
+          role: "duplicate",
+          canonicalUid: decision.existingUid,
+          matchedField: decision.matchedField,
+        });
+        return;
+      }
+
+      res.json({
+        status: "merge",
+        role: "canonical",
+        duplicateUid: decision.newUid,
+        matchedField: decision.matchedField,
+      });
+    } catch (err) {
+      console.error("requestAccountMerge error:", err);
+      sendError(res, 500, "Failed to evaluate account merge");
+    }
+  },
+);
+
+/**
+ * Drains the `userMerges/{newUid}` queue produced by `requestAccountMerge`
+ * whenever a user signs in via a second provider whose verified phone/email
+ * matches an existing Firestore user.
+ *
+ * Each merge:
+ *   - moves `wallets/{newUid}.balance` + `pendingBalance` into the existing wallet
+ *   - reassigns `transactions` where userId == newUid → existingUid
+ *   - reassigns active `sessions` (`userId`) and `groupInvites` (`toUserId`)
+ *   - logs a migration record to `migrations/{date}/entries/{newUid}` with
+ *     before/after snapshots for audit
+ *   - deletes the duplicate auth user
+ *
+ * Admin-only: caller must pass header `x-admin-key: <ADMIN_API_KEY>`. Body
+ * supports `{ confirm: boolean, mergeId?: string }`; without `confirm: true`
+ * the call is a dry-run that logs what *would* happen.
+ */
+export const mergeDuplicateUsers = onRequest(
+  PUBLIC_ADMIN_HTTP_OPTIONS,
+  async (req, res) => {
+    if (req.method !== "POST") {
+      sendError(res, 405, "Method not allowed");
+      return;
+    }
+
+    const provided = req.headers["x-admin-key"];
+    const expected = ADMIN_API_KEY.value();
+    if (!compareAdminKey(provided, expected)) {
+      sendError(res, 403, "Forbidden");
+      return;
+    }
+
+    const { confirm, mergeId } = (req.body ?? {}) as {
+      confirm?: boolean;
+      mergeId?: string;
+    };
+    const dryRun = confirm !== true;
+
+    try {
+      const queueSnap = mergeId
+        ? await db
+            .collection("userMerges")
+            .where(admin.firestore.FieldPath.documentId(), "==", mergeId)
+            .get()
+        : await db
+            .collection("userMerges")
+            .where("status", "==", "pending")
+            .limit(20)
+            .get();
+
+      const results: Array<{
+        newUid: string;
+        existingUid: string;
+        moved: {
+          walletCents: number;
+          pendingCents: number;
+          transactions: number;
+          sessions: number;
+          groupInvites: number;
+        };
+        status: "ok" | "skipped" | "error";
+        error?: string;
+      }> = [];
+
+      for (const mergeDoc of queueSnap.docs) {
+        const data = mergeDoc.data() as {
+          newUid?: string;
+          existingUid?: string;
+          status?: string;
+          matchedField?: string;
+        };
+        const newUid = data.newUid ?? mergeDoc.id;
+        const existingUid = data.existingUid;
+
+        if (!existingUid || existingUid === newUid) {
+          results.push({
+            newUid,
+            existingUid: existingUid ?? "",
+            moved: {
+              walletCents: 0,
+              pendingCents: 0,
+              transactions: 0,
+              sessions: 0,
+              groupInvites: 0,
+            },
+            status: "skipped",
+            error: "missing or self-targeted existingUid",
+          });
+          continue;
+        }
+
+        try {
+          const summary = await mergeOne(newUid, existingUid, dryRun);
+          results.push({
+            newUid,
+            existingUid,
+            moved: summary,
+            status: "ok",
+          });
+
+          if (!dryRun) {
+            await mergeDoc.ref.update({
+              status: "completed",
+              completedAt: admin.firestore.FieldValue.serverTimestamp(),
+              summary,
+            });
+            const dateId = new Date().toISOString().slice(0, 10);
+            await db
+              .collection("migrations")
+              .doc(dateId)
+              .collection("entries")
+              .doc(newUid)
+              .set(
+                {
+                  newUid,
+                  existingUid,
+                  matchedField: data.matchedField ?? "unknown",
+                  summary,
+                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+                { merge: true },
+              );
+          }
+        } catch (err) {
+          console.error(
+            `mergeDuplicateUsers: failed for ${newUid} -> ${existingUid}:`,
+            err,
+          );
+          results.push({
+            newUid,
+            existingUid,
+            moved: {
+              walletCents: 0,
+              pendingCents: 0,
+              transactions: 0,
+              sessions: 0,
+              groupInvites: 0,
+            },
+            status: "error",
+            error: err instanceof Error ? err.message : "unknown",
+          });
+          if (!dryRun) {
+            await mergeDoc.ref.update({
+              status: "failed",
+              lastError: err instanceof Error ? err.message : "unknown",
+              attemptedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      }
+
+      res.json({ dryRun, processed: results.length, results });
+    } catch (err) {
+      console.error("mergeDuplicateUsers error:", err);
+      sendError(res, 500, "Merge failed");
+    }
+  },
+);
+
+// ─── reconcileWalletBalances (nightly) ──────────────────────────────────────
+/**
+ * Sums each user's transaction log and compares to `wallets/{uid}.balance`.
+ * Drift > 0 cents writes a record to `walletAudits/{uid}_{date}` and logs
+ * an error so Sentry surfaces it. The job does not auto-correct — operators
+ * inspect the audit doc and decide whether to credit or refund.
+ *
+ * Reads are throttled in batches of 200 wallets per minute window so a large
+ * user base doesn't fan out into thousands of parallel queries.
+ */
+export const reconcileWalletBalances = onSchedule(
+  { schedule: "0 4 * * *", timeZone: "America/New_York", region: "us-central1" },
+  async () => {
+    const today = new Date();
+    const dateId = today.toISOString().slice(0, 10);
+    const walletsSnap = await db.collection("wallets").limit(2000).get();
+    let mismatchCount = 0;
+    let processed = 0;
+
+    for (const walletDoc of walletsSnap.docs) {
+      const uid = walletDoc.id;
+      const stored = walletDoc.data() ?? {};
+      const storedBalance =
+        typeof stored.balance === "number" ? stored.balance : 0;
+
+      const txnSnap = await db
+        .collection("transactions")
+        .where("userId", "==", uid)
+        .get();
+      let summed = 0;
+      txnSnap.forEach((d) => {
+        const amount = d.data().amount;
+        if (typeof amount === "number") summed += amount;
+      });
+
+      processed += 1;
+      const delta = storedBalance - summed;
+      if (delta !== 0) {
+        mismatchCount += 1;
+        console.error(
+          `reconcileWalletBalances drift uid=${uid} stored=${storedBalance} summed=${summed} delta=${delta}`,
+        );
+        await db
+          .collection("walletAudits")
+          .doc(`${uid}_${dateId}`)
+          .set(
+            {
+              uid,
+              date: dateId,
+              storedBalance,
+              summedFromTransactions: summed,
+              delta,
+              transactionCount: txnSnap.size,
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+      }
+    }
+
+    console.info(
+      `reconcileWalletBalances run date=${dateId} processed=${processed} mismatches=${mismatchCount}`,
+    );
+  },
+);
+
+/**
+ * Independently verifies — via auth admin SDK — that the two uids being
+ * merged still share a verified contact. Plays defense alongside the
+ * `userMerges` Firestore rule: even an attacker who manages to enqueue a
+ * forged merge entry can't move funds unless the auth records actually
+ * share a verified phone or email at run time. Phone-squat in a profile
+ * doc no longer suffices.
+ */
+async function assertSharedVerifiedContact(
+  newUid: string,
+  existingUid: string,
+): Promise<void> {
+  let newAuth: admin.auth.UserRecord;
+  let existingAuth: admin.auth.UserRecord;
+  try {
+    [newAuth, existingAuth] = await Promise.all([
+      admin.auth().getUser(newUid),
+      admin.auth().getUser(existingUid),
+    ]);
+  } catch (err) {
+    throw new Error(
+      `merge rejected: cannot load auth records (${err instanceof Error ? err.message : "unknown"})`,
+    );
+  }
+  const toMinimal = (u: admin.auth.UserRecord): MinimalAuthRecord => ({
+    uid: u.uid,
+    email: u.email ?? null,
+    emailVerified: u.emailVerified,
+    phoneNumber: u.phoneNumber ?? null,
+    metadata: { creationTime: u.metadata.creationTime },
+  });
+  if (!authUsersShareVerifiedContact(toMinimal(newAuth), toMinimal(existingAuth))) {
+    throw new Error(
+      `merge rejected: ${newUid} ↔ ${existingUid} share no verified contact`,
+    );
+  }
+}
+
+async function mergeOne(
+  newUid: string,
+  existingUid: string,
+  dryRun: boolean,
+): Promise<{
+  walletCents: number;
+  pendingCents: number;
+  transactions: number;
+  sessions: number;
+  groupInvites: number;
+}> {
+  // Auth check first: if these two uids don't actually share a verified
+  // contact at the auth layer, refuse before touching any money.
+  await assertSharedVerifiedContact(newUid, existingUid);
+
+  const summary = {
+    walletCents: 0,
+    pendingCents: 0,
+    transactions: 0,
+    sessions: 0,
+    groupInvites: 0,
+  };
+
+  // Wallet move. Idempotency: a second run finds zero balance to move.
+  const newWalletRef = db.collection("wallets").doc(newUid);
+  const existingWalletRef = db.collection("wallets").doc(existingUid);
+  await db.runTransaction(async (txn) => {
+    const newSnap = await txn.get(newWalletRef);
+    const existingSnap = await txn.get(existingWalletRef);
+    const newData = newSnap.exists ? newSnap.data() ?? {} : {};
+    const newBal = typeof newData.balance === "number" ? newData.balance : 0;
+    const newPending =
+      typeof newData.pendingBalance === "number" ? newData.pendingBalance : 0;
+    summary.walletCents = newBal;
+    summary.pendingCents = newPending;
+    if (dryRun) return;
+    if (existingSnap.exists) {
+      txn.update(existingWalletRef, {
+        balance: admin.firestore.FieldValue.increment(newBal),
+        pendingBalance: admin.firestore.FieldValue.increment(newPending),
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      txn.set(existingWalletRef, {
+        balance: newBal,
+        pendingBalance: newPending,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+    txn.set(
+      newWalletRef,
+      {
+        balance: 0,
+        pendingBalance: 0,
+        mergedInto: existingUid,
+        mergedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  // Transactions reassign.
+  const txnSnap = await db
+    .collection("transactions")
+    .where("userId", "==", newUid)
+    .get();
+  summary.transactions = txnSnap.size;
+  if (!dryRun && txnSnap.size > 0) {
+    const batch = db.batch();
+    txnSnap.forEach((d) => batch.update(d.ref, { userId: existingUid }));
+    await batch.commit();
+  }
+
+  // Sessions reassign.
+  const sessionSnap = await db
+    .collection("sessions")
+    .where("userId", "==", newUid)
+    .get();
+  summary.sessions = sessionSnap.size;
+  if (!dryRun && sessionSnap.size > 0) {
+    const batch = db.batch();
+    sessionSnap.forEach((d) => batch.update(d.ref, { userId: existingUid }));
+    await batch.commit();
+  }
+
+  // Group invites addressed to the duplicate.
+  const inviteSnap = await db
+    .collection("groupInvites")
+    .where("toUserId", "==", newUid)
+    .get();
+  summary.groupInvites = inviteSnap.size;
+  if (!dryRun && inviteSnap.size > 0) {
+    const batch = db.batch();
+    inviteSnap.forEach((d) =>
+      batch.update(d.ref, { toUserId: existingUid }),
+    );
+    await batch.commit();
+  }
+
+  // Audit marker first. We mark the duplicate user doc as merged BEFORE
+  // deleting the auth user — auth deletion is irreversible, so if a network
+  // blip lands between the two writes we'd otherwise lose the audit trail
+  // with no way to reconstruct it. Idempotent: `set({ merge: true })` is a
+  // no-op on a second run.
+  if (!dryRun) {
+    await db
+      .collection("users")
+      .doc(newUid)
+      .set(
+        {
+          mergedInto: existingUid,
+          mergedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+    // Auth deletion is the very last step — runs only after every data move
+    // and audit write has succeeded.
+    try {
+      await admin.auth().deleteUser(newUid);
+    } catch (err) {
+      console.warn(`mergeOne: deleteUser ${newUid} failed (continuing):`, err);
+    }
+  }
+
+  return summary;
+}

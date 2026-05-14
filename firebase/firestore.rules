@@ -20,6 +20,11 @@ service cloud.firestore {
       //   - legal acceptance (acceptLegalTerms CF)
       //   - KYC / Stripe account fields (createConnectAccount + linkBankAccount CFs)
       //   - forgiveness + promo flags (handleSessionForfeit, maybeAwardFinalsPromo)
+      //   - phone / email — locked after initial create to block account-merge
+      //     phone-squat: an attacker setting phone=victim's-number would
+      //     otherwise be queueable as a merge target. Mutation goes through a
+      //     Cloud Function that re-verifies via OTP or email link.
+      //   - mergedInto / mergedAt — written exclusively by mergeDuplicateUsers
       allow write: if request.auth != null
         && request.auth.uid == uid
         && !request.resource.data.diff(resource.data).affectedKeys()
@@ -29,7 +34,9 @@ service cloud.firestore {
                 'legalFirstName', 'legalLastName',
                 'linkedBank', 'plaidAccessToken', 'plaidItemId', 'plaidAccountId',
                 'firstSurrenderForgiven', 'firstSurrenderForgivenAt',
-                'finalsPromoAwarded', 'finalsPromoAwardedAt'
+                'finalsPromoAwarded', 'finalsPromoAwardedAt',
+                'phone', 'email',
+                'mergedInto', 'mergedAt'
               ]);
 
       // Initial profile creation (no existing doc — resource is null)
@@ -216,6 +223,43 @@ service cloud.firestore {
     match /config/featureFlags {
       allow read: if request.auth != null;
       allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // userMerges/{newUid}
+    // -------------------------------------------------------------------------
+    // Account-link merge queue. Written exclusively by the `requestAccountMerge`
+    // Cloud Function via admin SDK (which bypasses these rules). No client
+    // writes — even narrow client write rules opened a phone-squat vector
+    // where an attacker could enqueue a merge against a victim's verified
+    // contact. The CF re-verifies the shared contact via auth admin SDK
+    // before consuming the queue.
+    //
+    // Owner can read their own pending merge record so the UI can show
+    // "linking your accounts…" state.
+    match /userMerges/{newUid} {
+      allow read: if request.auth != null && request.auth.uid == newUid;
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // migrations/{date}/entries/{newUid}
+    // -------------------------------------------------------------------------
+    // Audit log of completed merges. Written by mergeDuplicateUsers admin
+    // CF. No client access — these are operator-only forensic records.
+    match /migrations/{date} {
+      allow read, write: if false;
+      match /entries/{newUid} {
+        allow read, write: if false;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // walletAudits/{uid_date}
+    // -------------------------------------------------------------------------
+    // Wallet-balance drift report from reconcileWalletBalances. Operator-only.
+    match /walletAudits/{auditId} {
+      allow read, write: if false;
     }
 
     // -------------------------------------------------------------------------

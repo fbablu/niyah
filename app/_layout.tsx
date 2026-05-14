@@ -10,7 +10,7 @@ import { useColors } from "../src/hooks/useColors";
 import { useThemeStore } from "../src/store/themeStore";
 import { useAuthStore } from "../src/store/authStore";
 import { useFeatureFlagsStore } from "../src/store/featureFlagsStore";
-import { ErrorBoundary } from "../src/components";
+import { ErrorBoundary, StatusBannerHost } from "../src/components";
 import { isEmailSignInLink } from "../src/config/firebase";
 import { DEMO_MODE, PENDING_REFERRAL_KEY } from "../src/constants/config";
 import { logger } from "../src/utils/logger";
@@ -183,6 +183,7 @@ export default function RootLayout() {
           style={{ flex: 1, backgroundColor: Colors.background }}
         >
           <StatusBar style={theme === "dark" ? "light" : "dark"} />
+          <StatusBannerHost />
           <Stack
             screenOptions={{
               headerShown: false,

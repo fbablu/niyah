@@ -1,9 +1,9 @@
 import React, { useRef, useEffect, useMemo } from "react";
-import { View, Text, StyleSheet, Animated } from "react-native";
+import { View, Text, StyleSheet, Animated, Pressable } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-import { Typography, Spacing, Font } from "../constants/colors";
+import { Typography, Spacing, Radius, Font } from "../constants/colors";
 import { useColors } from "../hooks/useColors";
 import { formatTime } from "../utils/format";
 
@@ -13,6 +13,12 @@ interface TimerProps {
   size?: "small" | "medium" | "large";
   showLabel?: boolean;
   showProgress?: boolean;
+  // "ring" = SVG progress ring (default, group sessions). "scrubber" =
+  // YouTube-style horizontal track with a play/pause button below; tapping
+  // pause invokes onPauseRequested (used by solo sessions to open the
+  // surrender confirm).
+  mode?: "ring" | "scrubber";
+  onPauseRequested?: () => void;
 }
 
 export const Timer: React.FC<TimerProps> = ({
@@ -21,6 +27,8 @@ export const Timer: React.FC<TimerProps> = ({
   size = "large",
   showLabel = true,
   showProgress = true,
+  mode = "ring",
+  onPauseRequested,
 }) => {
   const Colors = useColors();
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -114,9 +122,132 @@ export const Timer: React.FC<TimerProps> = ({
           color: Colors.text,
           fontVariant: ["tabular-nums"],
         },
+        scrubberContainer: {
+          width: "100%",
+          alignItems: "center",
+          paddingHorizontal: Spacing.lg,
+          gap: Spacing.md,
+        },
+        scrubberTimeRow: {
+          width: "100%",
+          flexDirection: "row",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+        },
+        scrubberElapsed: {
+          fontSize: Typography.labelMedium,
+          color: Colors.textSecondary,
+          ...Font.medium,
+          fontVariant: ["tabular-nums"],
+        },
+        scrubberRemaining: {
+          fontSize: Typography.labelMedium,
+          color: Colors.textSecondary,
+          ...Font.medium,
+          fontVariant: ["tabular-nums"],
+        },
+        scrubberTrack: {
+          width: "100%",
+          height: 4,
+          backgroundColor: Colors.backgroundTertiary,
+          borderRadius: Radius.full,
+          overflow: "visible",
+          justifyContent: "center",
+        },
+        scrubberFill: {
+          height: 4,
+          borderRadius: Radius.full,
+        },
+        scrubberThumb: {
+          position: "absolute",
+          width: 14,
+          height: 14,
+          borderRadius: 7,
+          marginLeft: -7,
+          top: -5,
+        },
+        scrubberCenterTime: {
+          ...Font.bold,
+          fontVariant: ["tabular-nums"],
+          fontSize: Typography.displaySmall,
+          letterSpacing: -1,
+        },
+        pauseButton: {
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: Colors.backgroundCard,
+          borderWidth: 1,
+          borderColor: Colors.border,
+        },
+        pauseBarsRow: {
+          flexDirection: "row",
+          gap: 4,
+        },
+        pauseBar: {
+          width: 4,
+          height: 18,
+          borderRadius: 2,
+        },
       }),
     [Colors],
   );
+
+  if (mode === "scrubber") {
+    const elapsed = Math.max(0, totalTime - timeRemaining);
+    const fillPercent = `${Math.min(
+      100,
+      Math.max(0, (1 - progress) * 100),
+    )}%` as `${number}%`;
+    return (
+      <Animated.View
+        style={[
+          styles.container,
+          styles.scrubberContainer,
+          { opacity: opacityAnim },
+        ]}
+      >
+        {showLabel && <Text style={styles.label}>Focus session</Text>}
+        <Text style={[styles.scrubberCenterTime, { color: getColor() }]}>
+          {formatTime(timeRemaining)}
+        </Text>
+        <View style={styles.scrubberTrack}>
+          <View
+            style={[
+              styles.scrubberFill,
+              { backgroundColor: getColor(), width: fillPercent },
+            ]}
+          />
+          <View
+            style={[
+              styles.scrubberThumb,
+              { left: fillPercent, backgroundColor: getColor() },
+            ]}
+          />
+        </View>
+        <View style={styles.scrubberTimeRow}>
+          <Text style={styles.scrubberElapsed}>{formatTime(elapsed)}</Text>
+          <Text style={styles.scrubberRemaining}>
+            -{formatTime(timeRemaining)}
+          </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Pause session (will prompt to forfeit)"
+          onPress={() => onPauseRequested?.()}
+          style={styles.pauseButton}
+          hitSlop={12}
+        >
+          <View style={styles.pauseBarsRow}>
+            <View style={[styles.pauseBar, { backgroundColor: getColor() }]} />
+            <View style={[styles.pauseBar, { backgroundColor: getColor() }]} />
+          </View>
+        </Pressable>
+      </Animated.View>
+    );
+  }
 
   return (
     <Animated.View style={[styles.container, { opacity: opacityAnim }]}>

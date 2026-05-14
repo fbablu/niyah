@@ -14,3 +14,10 @@ export { LegalContentView } from "./LegalContentView";
 export { LegalAcceptanceOverlay } from "./LegalAcceptanceOverlay";
 export { InviteCTA } from "./InviteCTA";
 export { ErrorBoundary, withErrorBoundary } from "./ErrorBoundary";
+export {
+  StatusBanner,
+  StatusBannerHost,
+  useStatusBanner,
+  type StatusBannerInput,
+  type StatusBannerSeverity,
+} from "./StatusBanner";

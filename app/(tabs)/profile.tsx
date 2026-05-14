@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  ActionSheetIOS,
+  Platform,
   View,
   Text,
   StyleSheet,
@@ -28,12 +30,16 @@ import {
   LegalContentView,
   InviteCTA,
   withErrorBoundary,
+  HoldToConfirmModal,
+  StatusBanner,
 } from "../../src/components";
 import { useAuthStore } from "../../src/store/authStore";
 import { useWalletStore } from "../../src/store/walletStore";
 import { usePartnerStore } from "../../src/store/partnerStore";
 import { useSocialStore } from "../../src/store/socialStore";
 import { formatMoney } from "../../src/utils/format";
+import { unlinkBankAccount } from "../../src/config/functions";
+import { getFunctionErrorMessage } from "../../src/utils/errors";
 import {
   ProfileHeader,
   ReputationCard,
@@ -47,7 +53,7 @@ function ProfileScreenInner() {
   const Colors = useColors();
   const { theme, toggleTheme } = useThemeStore();
   const router = useRouter();
-  const { user, logout, setBlobAvatar } = useAuthStore();
+  const { user, logout, setBlobAvatar, updateUser } = useAuthStore();
   const { balance, transactions, pendingWithdrawal } = useWalletStore();
   const { partners } = usePartnerStore();
   const { following, loadMyFollows } = useSocialStore();
@@ -59,6 +65,65 @@ function ProfileScreenInner() {
   }, [user?.id, loadMyFollows]);
 
   const [legalModalVisible, setLegalModalVisible] = useState(false);
+  const [removeBankModalVisible, setRemoveBankModalVisible] = useState(false);
+  const [bankActionLoading, setBankActionLoading] = useState(false);
+
+  const handleManageBank = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const replaceAction = () => {
+      router.push("/session/bank-setup?replace=true");
+    };
+    const removeAction = () => setRemoveBankModalVisible(true);
+
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ["Cancel", "Replace bank", "Remove bank"],
+          cancelButtonIndex: 0,
+          destructiveButtonIndex: 2,
+          title: "Manage linked bank",
+        },
+        (idx) => {
+          if (idx === 1) replaceAction();
+          else if (idx === 2) removeAction();
+        },
+      );
+    } else {
+      Alert.alert("Manage linked bank", undefined, [
+        { text: "Replace bank", onPress: replaceAction },
+        { text: "Remove bank", style: "destructive", onPress: removeAction },
+        { text: "Cancel", style: "cancel" },
+      ]);
+    }
+  };
+
+  const handleRemoveBankConfirmed = async () => {
+    if (bankActionLoading) return;
+    setBankActionLoading(true);
+    try {
+      await unlinkBankAccount();
+      updateUser({
+        linkedBank: undefined,
+        stripeAccountStatus: "pending",
+      });
+      StatusBanner.show({
+        severity: "success",
+        message: "Bank removed. Add a new one any time from Withdraw.",
+      });
+    } catch (err) {
+      logger.error("unlinkBankAccount failed:", err);
+      StatusBanner.show({
+        severity: "error",
+        message: getFunctionErrorMessage(
+          err,
+          "Could not remove bank. Please try again.",
+        ),
+      });
+    } finally {
+      setBankActionLoading(false);
+      setRemoveBankModalVisible(false);
+    }
+  };
 
   const handleLogout = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -114,15 +179,26 @@ function ProfileScreenInner() {
         {/* Linked Bank */}
         {user?.linkedBank && (
           <Card style={styles.balanceCard}>
-            <Text style={styles.balanceLabel}>Linked Bank</Text>
-            <Text style={styles.bankName}>
-              {(user.linkedBank as { institutionName?: string })
-                .institutionName ?? "Bank"}
-            </Text>
-            <Text style={styles.bankMask}>
-              Account ending in{" "}
-              {(user.linkedBank as { mask?: string }).mask ?? "****"}
-            </Text>
+            <View style={styles.bankCardHeader}>
+              <View style={styles.bankCardInfo}>
+                <Text style={styles.balanceLabel}>Linked Bank</Text>
+                <Text style={styles.bankName}>
+                  {(user.linkedBank as { institutionName?: string })
+                    .institutionName ?? "Bank"}
+                </Text>
+                <Text style={styles.bankMask}>
+                  Account ending in{" "}
+                  {(user.linkedBank as { mask?: string }).mask ?? "****"}
+                </Text>
+              </View>
+              <Pressable
+                onPress={handleManageBank}
+                style={styles.manageBankButton}
+                hitSlop={10}
+              >
+                <Text style={styles.manageBankButtonText}>Manage</Text>
+              </Pressable>
+            </View>
           </Card>
         )}
 
@@ -216,6 +292,16 @@ function ProfileScreenInner() {
           </Card>
         </View>
 
+        <HoldToConfirmModal
+          visible={removeBankModalVisible}
+          title="Remove linked bank?"
+          body="Withdrawals will be disabled until you connect a new one. Your balance and history stay intact."
+          holdLabel={bankActionLoading ? "Removing…" : "Hold to remove bank"}
+          cancelLabel="Keep bank"
+          onCancel={() => setRemoveBankModalVisible(false)}
+          onConfirm={handleRemoveBankConfirmed}
+        />
+
         {/* Read-only legal modal */}
         <Modal
           visible={legalModalVisible}
@@ -284,6 +370,25 @@ const makeStyles = (Colors: ThemeColors) =>
       fontSize: Typography.bodySmall,
       color: Colors.textSecondary,
       marginTop: 2,
+    },
+    bankCardHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    bankCardInfo: {
+      flex: 1,
+    },
+    manageBankButton: {
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      borderRadius: Radius.md,
+      backgroundColor: Colors.backgroundTertiary,
+    },
+    manageBankButtonText: {
+      fontSize: Typography.bodySmall,
+      ...Font.semibold,
+      color: Colors.text,
     },
     withdrawButton: {
       backgroundColor: Colors.backgroundTertiary,

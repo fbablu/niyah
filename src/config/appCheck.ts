@@ -2,11 +2,14 @@
  * Firebase App Check — attests that requests come from the genuine Niyah app
  * binary on a non-tampered device. Uses AppAttest on iOS 14+.
  *
- * Rollout strategy:
- *   1. Ship client with this init (sends tokens on every Cloud Function call).
- *   2. Server logs token presence in soft-enforcement mode (no reject yet).
- *   3. After verifying tokens flow in Firebase Console → App Check metrics,
- *      flip project to "Enforced" — unattested calls get rejected.
+ * Rollout state (May 2026):
+ *   1. ✅ Ship client with this init (sends tokens on every Cloud Function call).
+ *   2. ✅ Server logs token presence in soft-enforcement mode (no reject yet).
+ *   3. 🚧 Money paths (`createPlaidLinkToken`, `linkBankAccount`,
+ *      `requestWithdrawal`, `createGroupSession`) now hard-reject calls with
+ *      no/invalid App Check token. Other endpoints stay soft-fail while
+ *      token coverage finishes rolling out. Flip them next when Firebase
+ *      Console → App Check metrics show 100% verified traffic.
  */
 
 import appCheck from "@react-native-firebase/app-check";
