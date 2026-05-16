@@ -70,10 +70,68 @@ The custom Niyah-branded shield is implemented via `ShieldConfigurationExtension
 
 iOS does not allow injecting modals into other apps. The custom shield via `ManagedSettingsStore` is the only API-compliant approach.
 
+## Planned iOS Extension Targets (Post-Demo)
+
+These two new extensions are scoped in [post-demo-roadmap.md](./post-demo-roadmap.md) Lane B and unblock several premium-UX features. Both are **build-required** — no JS-only fallback.
+
+### `NiyahDeviceActivityReport`
+
+iOS 16+ app extension built on the `DeviceActivityReport` API — the only sanctioned way to read per-app usage data on a non-MDM device. Surfaces aggregated daily/weekly usage for the user's selected `FamilyActivitySelection` categories.
+
+| File | Purpose |
+| ---- | ------- |
+| `ios/NiyahDeviceActivityReport/DeviceActivityReport.swift` | Extension entry point with SwiftUI scenes for daily/weekly views. |
+| `ios/NiyahDeviceActivityReport/Info.plist` | Bundle id `com.niyah.app.device-activity-report`, FamilyControls Distribution entitlement attached. |
+| App Group `UserDefaults` (`group.com.niyah.app`) | Extension writes baseline snapshots (top apps + daily-average minutes per category). Main app reads via `getScreenTimeBaseline()`. |
+
+Bridge method on `NiyahScreenTimeModule.swift`:
+
+```swift
+func getScreenTimeBaseline() -> [(appToken, dailyAverageMinutes, weeklyTotal, category)]
+```
+
+JS wrapper in `src/config/screentime.ts`. Powers:
+
+- Redesigned app-selection onboarding (Lane B3 — "Select all apps to monitor" + per-app prioritization with usage badges).
+- Group equity cap-target model (see [Group Equity](./group-equity.md)) — provides the trusted `baselineMs` input to `calculatePayouts`.
+
+Plugin: `plugins/withScreenTimeExtensions.ts` is extended to register the new target alongside `device-activity-monitor`, `shield-action`, `shield-config`.
+
+### `NiyahLiveActivity`
+
+ActivityKit + WidgetKit widget extension for **lock-screen + Dynamic Island** in-session UX.
+
+| Layout | Content |
+| ------ | ------- |
+| Lock screen | Niyah blob, big timer, top-3 leaderboard with status dots + violation counts. |
+| Dynamic Island (compact) | Timer + blob mark. |
+| Dynamic Island (expanded) | Timer + 3-row leaderboard. |
+| Minimal | Timer only. |
+
+`ActivityAttributes` carries `sessionId`, `sessionType` (solo/group), `endsAt`, `blobAssetName`, and a compact leaderboard array (name + status + violations).
+
+Bridge methods (on a new `NiyahLiveActivityModule.swift` or extended `NiyahScreenTimeModule.swift`):
+
+```swift
+func startLiveActivity(attrs)
+func updateLiveActivity(state)
+func endLiveActivity()
+```
+
+Wired into `src/store/sessionStore.ts` (solo) and `src/store/groupSessionStore.ts` (group):
+
+- Session start → `startLiveActivity`.
+- Each Firestore session-doc tick (`subscribeToSession`) → `updateLiveActivity`.
+- Complete / surrender → `endLiveActivity`.
+
+App Group `UserDefaults` is reused for cross-process leaderboard state so the widget timeline provider can render without an active JS bridge.
+
 ## Key Apple Frameworks Reference
 
-| Framework       | Purpose                                                                |
-| --------------- | ---------------------------------------------------------------------- |
-| FamilyControls  | Authorization & privacy tokens for selecting apps/websites             |
-| ManagedSettings | Apply restrictions (shield apps), `ShieldConfiguration` for custom UI  |
-| DeviceActivity  | Monitor usage, execute code on schedules/events, handle shield actions |
+| Framework             | Purpose                                                                       |
+| --------------------- | ----------------------------------------------------------------------------- |
+| FamilyControls        | Authorization & privacy tokens for selecting apps/websites                    |
+| ManagedSettings       | Apply restrictions (shield apps), `ShieldConfiguration` for custom UI         |
+| DeviceActivity        | Monitor usage, execute code on schedules/events, handle shield actions        |
+| DeviceActivityReport  | Read aggregated per-app/category usage; powers baseline + cap-target equity   |
+| ActivityKit + WidgetKit | Lock-screen & Dynamic Island Live Activities for in-session presence        |
