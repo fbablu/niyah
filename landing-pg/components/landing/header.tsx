@@ -15,7 +15,7 @@ export function Header() {
 
         <div className="flex items-center gap-2 sm:gap-3">
           <a
-            href="https://github.com/SySyAli/niyah"
+            href="https://github.com/fbablu/niyah"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="View source on GitHub"
