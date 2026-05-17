@@ -217,6 +217,14 @@ export default function RootLayout() {
                   animation: "slide_from_right",
                 }}
               />
+              <Stack.Screen
+                name="screentime-priorities"
+                options={{
+                  headerShown: true,
+                  title: "Screen Time Priorities",
+                  animation: "slide_from_right",
+                }}
+              />
             </Stack>
           </KeyboardProvider>
         </GestureHandlerRootView>

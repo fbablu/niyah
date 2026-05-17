@@ -4,7 +4,11 @@ import {
   type AuthorizationStatus,
   type AppSelectionToken,
   type ShieldViolationEvent,
+  type BaselineApp,
+  type LiveActivityStartPayload,
+  type LiveActivityState,
 } from "../../modules/niyah-screentime";
+import { LANE_B_ENABLED } from "../constants/config";
 
 // ---------------------------------------------------------------------------
 // Feature availability
@@ -190,4 +194,68 @@ export const onSurrenderRequested = (callback: () => void): (() => void) => {
 export const checkPendingSurrender = (): boolean => {
   if (!isScreenTimeAvailable) return false;
   return NiyahScreenTime.checkPendingSurrender();
+};
+
+// ---------------------------------------------------------------------------
+// DeviceActivityReport baseline (Lane B2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the user's per-app baseline (top-N by daily-average minutes).
+ * The NiyahDeviceActivityReport extension populates this on its own
+ * schedule (typically every few hours after first authorization).
+ *
+ * Returns an empty array when:
+ *   - Screen Time isn't available (non-iOS, iOS <16, missing entitlement)
+ *   - The extension hasn't yet aggregated data (first ~24h)
+ *   - LANE_B_ENABLED is false (extension not registered in build)
+ */
+export const getScreenTimeBaseline = (): BaselineApp[] => {
+  if (!isScreenTimeAvailable || !LANE_B_ENABLED) return [];
+  try {
+    return NiyahScreenTime.getScreenTimeBaseline();
+  } catch {
+    return [];
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Live Activity (Lane B7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Start a Live Activity for the current session. No-op when Lane B is
+ * disabled or Screen Time / ActivityKit isn't available.
+ *
+ * Pass the full payload (static attrs + initial dynamic state). The
+ * widget reads `endsAt` and lets the system tick the timer locally — we
+ * do NOT need to call updateLiveActivity every second.
+ *
+ * Call sites:
+ *   - sessionStore.startSession (solo)
+ *   - groupSessionStore.startSession (group)
+ */
+export const startLiveActivity = async (
+  payload: LiveActivityStartPayload,
+): Promise<boolean> => {
+  if (!isScreenTimeAvailable || !LANE_B_ENABLED) return false;
+  return NiyahScreenTime.startLiveActivity(JSON.stringify(payload));
+};
+
+/**
+ * Push a new dynamic state to the active Live Activity. Used when the
+ * leaderboard composition or payout share shifts meaningfully — not on
+ * every tick.
+ */
+export const updateLiveActivity = async (
+  state: LiveActivityState,
+): Promise<boolean> => {
+  if (!isScreenTimeAvailable || !LANE_B_ENABLED) return false;
+  return NiyahScreenTime.updateLiveActivity(JSON.stringify(state));
+};
+
+/** End the active Live Activity. Call on complete or surrender. */
+export const endLiveActivity = async (): Promise<boolean> => {
+  if (!isScreenTimeAvailable || !LANE_B_ENABLED) return false;
+  return NiyahScreenTime.endLiveActivity();
 };

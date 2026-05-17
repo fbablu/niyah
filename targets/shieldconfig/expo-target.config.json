@@ -1,0 +1,10 @@
+{
+  "type": "shield-config",
+  "bundleIdentifier": ".shield-config",
+  "deploymentTarget": "16.0",
+  "frameworks": ["UIKit"],
+  "entitlements": {
+    "com.apple.developer.family-controls": true,
+    "com.apple.security.application-groups": ["group.com.niyah.app"]
+  }
+}

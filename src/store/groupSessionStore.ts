@@ -36,7 +36,14 @@ import {
   subscribeToActiveGroupSessions,
 } from "../config/firebase";
 import { logger } from "../utils/logger";
-import { setSessionContext, clearSessionContext } from "../config/screentime";
+import {
+  setSessionContext,
+  clearSessionContext,
+  startLiveActivity,
+  updateLiveActivity,
+  endLiveActivity,
+} from "../config/screentime";
+import type { LiveActivityLeaderboardEntry } from "../../modules/niyah-screentime";
 
 // Participants are provided without the fields the store sets internally.
 type NewParticipant = Omit<
@@ -138,6 +145,92 @@ let _subscribedInvitesUid: string | null = null;
 let _unsubActiveSessions: (() => void) | null = null;
 let _subscribedActiveSessionsUid: string | null = null;
 
+// ─── Live Activity transition tracking ──────────────────────────────────────
+// Tracks the last status we mirrored to the iOS Live Activity so we know
+// when to call start (null → active) vs update (active tick) vs end (active
+// → terminal). Lives outside the store because it represents an external
+// side-effect handle, not user-visible state.
+let _liveActivityStartedFor: string | null = null;
+
+function buildLeaderboard(
+  doc: GroupSessionDoc,
+): LiveActivityLeaderboardEntry[] {
+  return Object.values(doc.participants)
+    .map((p) => ({
+      name: p.name || "Friend",
+      status: p.surrendered
+        ? ("surrendered" as const)
+        : p.completed
+          ? ("completed" as const)
+          : ("active" as const),
+      violations: p.violationCount ?? 0,
+    }))
+    .slice(0, 3);
+}
+
+function optimisticUserPayoutCents(doc: GroupSessionDoc): number {
+  const myId = useAuthStore.getState().user?.id;
+  if (!myId) return 0;
+  const me = doc.participants[myId];
+  if (!me || me.surrendered) return 0;
+  // Optimistic = full pool / active participant count. Cloud Function does
+  // the authoritative settlement on completion.
+  const active = Object.values(doc.participants).filter(
+    (p) => !p.surrendered,
+  ).length;
+  if (active <= 0) return 0;
+  return Math.floor(doc.poolTotal / active);
+}
+
+/**
+ * Reflect each Firestore session-doc update to the iOS Live Activity.
+ * Start on first "active" transition, update on subsequent ticks, end
+ * when the session leaves "active". The native side is a no-op when
+ * Lane B is disabled or ActivityKit isn't available.
+ */
+function mirrorToLiveActivity(doc: GroupSessionDoc): void {
+  const endsAtSec = doc.endsAt ? doc.endsAt.getTime() / 1000 : 0;
+  if (!endsAtSec) {
+    // No endsAt means session hasn't started — nothing to mirror yet.
+    return;
+  }
+
+  const isActive = doc.status === "active";
+  const leaderboard = buildLeaderboard(doc);
+  const userPayoutCents = optimisticUserPayoutCents(doc);
+
+  if (isActive && _liveActivityStartedFor !== doc.id) {
+    const userColor =
+      useAuthStore.getState().user?.blobAvatar?.colorPreset ?? "forest";
+    _liveActivityStartedFor = doc.id;
+    startLiveActivity({
+      sessionId: doc.id,
+      sessionType: "group",
+      blobAssetName: `blob_${userColor}`,
+      endsAt: endsAtSec,
+      leaderboard,
+      userPayoutCents,
+    }).catch((err) => logger.warn("startLiveActivity (group) failed:", err));
+    return;
+  }
+
+  if (isActive && _liveActivityStartedFor === doc.id) {
+    updateLiveActivity({
+      endsAt: endsAtSec,
+      leaderboard,
+      userPayoutCents,
+    }).catch((err) => logger.warn("updateLiveActivity (group) failed:", err));
+    return;
+  }
+
+  if (!isActive && _liveActivityStartedFor === doc.id) {
+    _liveActivityStartedFor = null;
+    endLiveActivity().catch((err) =>
+      logger.warn("endLiveActivity (group) failed:", err),
+    );
+  }
+}
+
 // ─── Store interface ────────────────────────────────────────────────────────
 
 interface GroupSessionState {
@@ -229,9 +322,15 @@ export const useGroupSessionStore = create<GroupSessionState>((set, get) => ({
     _subscribedSessionId = sessionId;
     _unsubSession = subscribeToGroupSession(sessionId, (data) => {
       if (data) {
-        set({ activeSession: parseGroupSessionDoc(data) });
+        const doc = parseGroupSessionDoc(data);
+        set({ activeSession: doc });
+        mirrorToLiveActivity(doc);
       } else {
         set({ activeSession: null });
+        if (_liveActivityStartedFor) {
+          endLiveActivity().catch(() => {});
+          _liveActivityStartedFor = null;
+        }
       }
     });
   },

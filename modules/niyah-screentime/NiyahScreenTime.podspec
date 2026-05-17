@@ -21,5 +21,7 @@ Pod::Spec.new do |s|
   # Screen Time frameworks are system frameworks -- no CocoaPods deps needed.
   # They are linked via weak_framework so the app still launches on iOS < 16
   # (with feature-gated unavailability).
-  s.weak_frameworks = 'FamilyControls', 'ManagedSettings', 'DeviceActivity'
+  # ActivityKit is iOS 16.1+ — also weak so the main bridge methods can no-op
+  # gracefully on older devices.
+  s.weak_frameworks = 'FamilyControls', 'ManagedSettings', 'DeviceActivity', 'ActivityKit'
 end

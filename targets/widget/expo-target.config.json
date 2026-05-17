@@ -1,0 +1,8 @@
+{
+  "type": "widget",
+  "bundleIdentifier": ".live-activity",
+  "deploymentTarget": "16.1",
+  "entitlements": {
+    "com.apple.security.application-groups": ["group.com.niyah.app"]
+  }
+}

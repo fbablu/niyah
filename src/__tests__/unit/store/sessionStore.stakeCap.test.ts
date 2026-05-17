@@ -25,6 +25,9 @@ jest.mock("../../../config/screentime", () => ({
   stopBlocking: jest.fn().mockResolvedValue(undefined),
   onSurrenderRequested: jest.fn(() => () => {}),
   onShieldViolation: jest.fn(() => () => {}),
+  startLiveActivity: jest.fn().mockResolvedValue(false),
+  updateLiveActivity: jest.fn().mockResolvedValue(false),
+  endLiveActivity: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock("../../../config/functions", () => ({

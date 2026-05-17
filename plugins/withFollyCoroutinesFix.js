@@ -16,17 +16,27 @@ const path = require("path");
 const PATCH_MARKER = "# [withFollyCoroutinesFix]";
 
 const PATCH_RUBY = `
-    ${PATCH_MARKER} Patch RCT-Folly headers for Xcode 26+ coroutine compat
-    folly_pod_dir = File.join(installer.sandbox.root.to_s, 'RCT-Folly', 'folly')
-    ['Expected.h', 'Optional.h'].each do |header|
-      header_path = File.join(folly_pod_dir, header)
-      next unless File.exist?(header_path)
+    ${PATCH_MARKER} Patch folly headers for Xcode 26+ coroutine compat.
+    # Covers both the standalone RCT-Folly pod (older RN) and the bundled
+    # folly headers inside the ReactNativeDependencies pod / xcframework
+    # (RN 0.81 New Architecture). The public/private header symlinks in
+    # Pods/Headers/{Public,Private}/... resolve to these real files.
+    folly_header_paths = [
+      File.join(installer.sandbox.root.to_s, 'RCT-Folly', 'folly', 'Expected.h'),
+      File.join(installer.sandbox.root.to_s, 'RCT-Folly', 'folly', 'Optional.h'),
+      File.join(installer.sandbox.root.to_s, 'ReactNativeDependencies', 'Headers', 'folly', 'Expected.h'),
+      File.join(installer.sandbox.root.to_s, 'ReactNativeDependencies', 'Headers', 'folly', 'Optional.h'),
+      File.join(installer.sandbox.root.to_s, 'ReactNativeDependencies', 'framework', 'packages', 'react-native', 'ReactNativeDependencies.xcframework', 'Headers', 'folly', 'Expected.h'),
+      File.join(installer.sandbox.root.to_s, 'ReactNativeDependencies', 'framework', 'packages', 'react-native', 'ReactNativeDependencies.xcframework', 'Headers', 'folly', 'Optional.h'),
+    ]
+    folly_header_paths.each do |header_path|
+      next unless File.exist?(header_path) && !File.symlink?(header_path)
       content = File.read(header_path)
       old_guard = '#if FOLLY_HAS_COROUTINES'
       new_guard = '#if FOLLY_HAS_COROUTINES && __has_include(<folly/coro/Coroutine.h>)'
-      if content.include?(old_guard) && !content.include?('__has_include(<folly/coro/Coroutine.h>)')
-        File.write(header_path, content.gsub(old_guard, new_guard))
-      end
+      next unless content.include?(old_guard) && !content.include?('__has_include(<folly/coro/Coroutine.h>)')
+      File.chmod(0644, header_path)
+      File.write(header_path, content.gsub(old_guard, new_guard))
     end
 `;
 

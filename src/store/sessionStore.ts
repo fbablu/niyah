@@ -22,6 +22,8 @@ import {
   stopBlocking,
   onSurrenderRequested,
   onShieldViolation,
+  startLiveActivity,
+  endLiveActivity,
 } from "../config/screentime";
 import { generateId } from "../utils/id";
 import { logger } from "../utils/logger";
@@ -108,6 +110,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       logger.warn("Screen Time startBlocking failed:", err),
     );
 
+    // Start Live Activity (no-op when Lane B disabled or iOS <16.1). Solo
+    // sessions ship an empty leaderboard — the widget shows just timer + blob.
+    {
+      const userColor =
+        useAuthStore.getState().user?.blobAvatar?.colorPreset ?? "forest";
+      startLiveActivity({
+        sessionId: session.id,
+        sessionType: "solo",
+        blobAssetName: `blob_${userColor}`,
+        endsAt: session.endsAt.getTime() / 1000,
+        leaderboard: [],
+        userPayoutCents: session.potentialPayout,
+      }).catch((err) => logger.warn("startLiveActivity (solo) failed:", err));
+    }
+
     // Listen for surrender requests from the custom shield screen.
     // If the user taps "Surrender Session" on the Niyah shield while a
     // blocked app is open, the ShieldActionExtension writes a flag to
@@ -178,6 +195,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Stop Screen Time blocking (fire-and-forget)
     stopBlocking().catch((err) =>
       logger.warn("Screen Time stopBlocking (surrender) failed:", err),
+    );
+    endLiveActivity().catch((err) =>
+      logger.warn("endLiveActivity (surrender) failed:", err),
     );
 
     // Clean up violation listener
@@ -253,6 +273,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Stop Screen Time blocking (fire-and-forget)
     stopBlocking().catch((err) =>
       logger.warn("Screen Time stopBlocking (complete) failed:", err),
+    );
+    endLiveActivity().catch((err) =>
+      logger.warn("endLiveActivity (complete) failed:", err),
     );
 
     // Clean up violation listener

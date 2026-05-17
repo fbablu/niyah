@@ -2,37 +2,28 @@ import ManagedSettings
 import ManagedSettingsUI
 import UIKit
 
-/// Custom shield appearance shown when a user opens a blocked app during a
-/// Niyah focus session. iOS discovers this extension automatically when apps
-/// are shielded via ManagedSettingsStore.
-///
-/// Primary button   → "Back to Focus"        (returns user to home screen)
-/// Secondary button → "Unlock & forfeit stake" (kicks off the two-step
-///                                              confirm flow in ShieldAction)
-class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
+/// Class name MUST stay `ShieldConfigurationExtension` — apple-targets
+/// writes `$(PRODUCT_MODULE_NAME).ShieldConfigurationExtension` into the
+/// generated Info.plist as NSExtensionPrincipalClass.
+class ShieldConfigurationExtension: ShieldConfigurationDataSource {
 
-    // ── Variant detection ─────────────────────────────────────────────────────
-    /// Five visual + copy variants. The shield picks one based on the
-    /// `bundleIdentifier` / category of the blocked app so that the user gets
-    /// a tonal match instead of one generic screen.
     private enum ShieldVariant {
         case social, video, gaming, news, defaultVariant
     }
 
-    // ── Brand colours (hardcoded — extensions can't read the main app bundle)
-    private let textPrimary   = UIColor(red: 242/255, green: 237/255, blue: 228/255, alpha: 1) // #F2EDE4
+    private let textPrimary   = UIColor(red: 242/255, green: 237/255, blue: 228/255, alpha: 1)
     private let textSecondary = UIColor(red: 170/255, green: 170/255, blue: 180/255, alpha: 1)
-    private let primaryGreen  = UIColor(red: 45/255,  green: 106/255, blue: 79/255,  alpha: 1) // #2D6A4F
+    private let primaryGreen  = UIColor(red: 45/255,  green: 106/255, blue: 79/255,  alpha: 1)
     private let accentGreen   = UIColor(red: 82/255,  green: 183/255, blue: 136/255, alpha: 1)
     private let dangerRed     = UIColor(red: 220/255, green: 60/255,  blue: 60/255,  alpha: 1)
 
     private func backgroundColor(for variant: ShieldVariant) -> UIColor {
         switch variant {
-        case .social:         return UIColor(red: 36/255, green: 18/255, blue: 50/255, alpha: 1) // purple-tinted
-        case .video:          return UIColor(red: 12/255, green: 32/255, blue: 68/255, alpha: 1) // deep blue
-        case .gaming:         return UIColor(red: 14/255, green: 38/255, blue: 22/255, alpha: 1) // dark green
-        case .news:           return UIColor(red: 42/255, green: 30/255, blue: 16/255, alpha: 1) // warm brown
-        case .defaultVariant: return UIColor(red: 15/255, green: 15/255, blue: 20/255, alpha: 1) // near-black
+        case .social:         return UIColor(red: 36/255, green: 18/255, blue: 50/255, alpha: 1)
+        case .video:          return UIColor(red: 12/255, green: 32/255, blue: 68/255, alpha: 1)
+        case .gaming:         return UIColor(red: 14/255, green: 38/255, blue: 22/255, alpha: 1)
+        case .news:           return UIColor(red: 42/255, green: 30/255, blue: 16/255, alpha: 1)
+        case .defaultVariant: return UIColor(red: 15/255, green: 15/255, blue: 20/255, alpha: 1)
         }
     }
 
@@ -52,9 +43,6 @@ class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
             .withTintColor(accentGreen, renderingMode: .alwaysOriginal)
     }
 
-    /// Match a bundle identifier against known social/video/gaming/news apps.
-    /// Bundle IDs aren't always present (Apple gates this), so we also fall
-    /// back to ActivityCategory.localizedDisplayName when available.
     private func detectVariant(bundleID: String?, categoryName: String?) -> ShieldVariant {
         if let bid = bundleID?.lowercased() {
             if bid.contains("instagram") || bid.contains("facebook") || bid.contains("snapchat")
@@ -87,8 +75,6 @@ class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
         return .defaultVariant
     }
 
-    // ── ShieldConfigurationDataSource overrides ───────────────────────────────
-
     override func configuration(shielding application: Application) -> ShieldConfiguration {
         makeConfiguration(
             bundleID: application.bundleIdentifier,
@@ -120,12 +106,8 @@ class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
         )
     }
 
-    // ── App Group for reading session context from main app ─────────────────
-
     private let appGroupID = "group.com.niyah.app"
     private let sessionContextKey = "niyah_session_context"
-
-    // ── Shared config factory ─────────────────────────────────────────────────
 
     private func makeConfiguration(
         bundleID: String?,
@@ -158,16 +140,12 @@ class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
         )
     }
 
-    /// Build a dynamic subtitle based on session context from the main app.
-    /// For group sessions, shows participant names and fun messages.
-    /// Falls back to the default solo message if no context is available.
     private func buildSubtitle(variant: ShieldVariant) -> String {
         let context = readSessionContext()
         let names = context?["names"] as? [String]
         let stake = context?["stake"] as? Int ?? 0
         let stakeStr = stake > 0 ? String(format: "$%.2f", Double(stake) / 100.0) : nil
 
-        // Rotate quotes by current minute for freshness on re-open.
         let quotes = variantQuotes(
             variant,
             namesList: (names?.isEmpty == false) ? formatNames(names!) : nil,
@@ -188,8 +166,6 @@ class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
         return parsed
     }
 
-    /// Return 20+ variant-specific quotes. When friends/stake are available
-    /// the social-pressure variants get extra group-aware lines mixed in.
     private func variantQuotes(_ variant: ShieldVariant, namesList: String?, stakeStr: String?) -> [String] {
         var quotes: [String] = baseQuotes(for: variant)
         if let names = namesList {
@@ -330,7 +306,6 @@ class NiyahShieldConfigurationDataSource: ShieldConfigurationDataSource {
         }
     }
 
-    /// Format ["Sarah", "Mike", "Jake"] → "Sarah, Mike, and Jake"
     private func formatNames(_ names: [String]) -> String {
         switch names.count {
         case 1: return names[0]

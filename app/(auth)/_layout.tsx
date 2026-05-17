@@ -23,6 +23,7 @@ export default function AuthLayout() {
       <Stack.Screen name="how-it-works" />
       <Stack.Screen name="screen-time-math" />
       <Stack.Screen name="screentime-setup" />
+      <Stack.Screen name="screentime-baseline" />
     </Stack>
   );
 }

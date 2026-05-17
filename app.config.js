@@ -37,14 +37,23 @@ module.exports = {
       supportsTablet: true,
       bundleIdentifier: "com.niyah.app",
       buildNumber: "11",
+      appleTeamId: "4R55F73KCP",
       googleServicesFile:
         process.env.GOOGLE_SERVICE_INFO_PLIST ||
         "./firebase/GoogleService-Info.plist",
       usesAppleSignIn: true,
       associatedDomains: [`applinks:${firebaseProjectId}.firebaseapp.com`],
+      entitlements: {
+        "com.apple.developer.family-controls": true,
+        "com.apple.security.application-groups": ["group.com.niyah.app"],
+        "aps-environment": "production",
+      },
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         UIBackgroundModes: ["remote-notification", "fetch"],
+        NSSupportsLiveActivities: true,
+        NSFamilyControlsUsageDescription:
+          "Niyah needs Screen Time access to block distracting apps during your focus sessions.",
         NSContactsUsageDescription:
           "Niyah uses your contacts to invite friends to focus sessions.",
         NSCameraUsageDescription:
@@ -123,10 +132,8 @@ module.exports = {
       "./plugins/withGoogleServicesPlist",
       "./plugins/withGoogleServicesJson",
       "./plugins/withFirebaseStaticFrameworks",
-      "./plugins/withScreenTimeEntitlement",
-      "./plugins/withDeviceActivityMonitor",
-      "./plugins/withShieldExtensions",
       "./plugins/withResourceBundleSigning",
+      "@bacons/apple-targets",
     ],
     experiments: {
       typedRoutes: true,
