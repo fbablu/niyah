@@ -150,21 +150,22 @@ describe("sessionStore — Firestore persistence (DEMO_MODE=false)", () => {
 
   // ─── updateSession (surrenderSession) ─────────────────────────────────────
 
-  describe("surrenderSession — updateSession", () => {
-    it("calls updateSession with 'surrendered' status", async () => {
+  describe("surrenderSession — cloudForfeit owns status update", () => {
+    // In non-DEMO mode the client skips updateSession on surrender and lets
+    // cloudForfeit's transaction set status server-side. Writing client-side
+    // raced the CF read and triggered "Session is not active (current status:
+    // surrendered)" 400s. See sessionStore.surrenderSession.
+    it("does not call updateSession when surrendering in prod mode", async () => {
       useSessionStore.getState().startSession("daily");
-      const sessionId = useSessionStore.getState().currentSession!.id;
-
       useSessionStore.getState().surrenderSession();
       await flush();
 
-      expect(updateSession).toHaveBeenCalledWith(
-        sessionId,
-        expect.objectContaining({
-          status: "surrendered",
-          completedAt: expect.any(Date),
-        }),
+      // The writeSession call on startSession is OK; we only assert that no
+      // surrendered-status update was written from the client.
+      const surrenderCalls = (updateSession as jest.Mock).mock.calls.filter(
+        ([, payload]) => payload?.status === "surrendered",
       );
+      expect(surrenderCalls).toHaveLength(0);
     });
   });
 
