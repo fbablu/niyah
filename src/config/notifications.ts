@@ -32,7 +32,12 @@ import {
 } from "@react-native-firebase/firestore";
 import { Platform } from "react-native";
 import { router, type RelativePathString } from "expo-router";
-import notifee, { AndroidImportance, EventType } from "@notifee/react-native";
+import notifee, {
+  AndroidImportance,
+  EventType,
+  TriggerType,
+  type TimestampTrigger,
+} from "@notifee/react-native";
 import { logger } from "../utils/logger";
 
 const NOTIFEE_CHANNEL_ID = "niyah-default";
@@ -346,4 +351,52 @@ export function resetNotifications(): void {
     activeCleanup = null;
   }
   initPromise = null;
+}
+
+// ─── Session-end scheduled notification ─────────────────────────────────────
+// Fires at the moment the timer expires so the user knows the session is done
+// even if the app is backgrounded. Notifee schedules with the system, so it
+// fires whether or not Niyah is running.
+
+const SESSION_END_NOTIFICATION_ID = "niyah-session-end";
+
+export async function scheduleSessionEndNotification(
+  sessionEndsAt: Date,
+  body: string,
+): Promise<void> {
+  await ensureNotifeeChannel();
+  const trigger: TimestampTrigger = {
+    type: TriggerType.TIMESTAMP,
+    timestamp: sessionEndsAt.getTime(),
+  };
+  try {
+    await notifee.createTriggerNotification(
+      {
+        id: SESSION_END_NOTIFICATION_ID,
+        title: "Focus session complete",
+        body,
+        data: { type: "session_complete" },
+        android: {
+          channelId: NOTIFEE_CHANNEL_ID,
+          pressAction: { id: "default" },
+          smallIcon: "ic_notification",
+        },
+        ios: {
+          sound: "default",
+          interruptionLevel: "timeSensitive",
+        },
+      },
+      trigger,
+    );
+  } catch (err) {
+    logger.warn("scheduleSessionEndNotification failed:", err);
+  }
+}
+
+export async function cancelSessionEndNotification(): Promise<void> {
+  try {
+    await notifee.cancelTriggerNotification(SESSION_END_NOTIFICATION_ID);
+  } catch (err) {
+    logger.warn("cancelSessionEndNotification failed:", err);
+  }
 }

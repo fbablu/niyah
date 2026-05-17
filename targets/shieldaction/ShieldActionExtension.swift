@@ -56,18 +56,21 @@ class ShieldActionExtension: ShieldActionDelegate {
             completionHandler(.close)
 
         case .secondaryButtonPressed:
-            NSLog("[NiyahShieldAction] Surrender tapped — flipping pending flag, scheduling confirm push")
+            // Direct-open Niyah → /session/blocked deep link. The full custom
+            // surrender UI (brand-colored screen, animated avatar, stake +
+            // friends context, confirm/cancel buttons) lives in the main app,
+            // not in this shield. The NSExtensionContext().open trick is what
+            // Opal and One Sec use — Apple doesn't officially support opening
+            // the host app from a ShieldActionDelegate, but instantiating a
+            // fresh NSExtensionContext routes around that restriction.
+            //
+            // We still flip pendingSurrenderKey so the app can detect a
+            // confirm-in-flight if the user opens Niyah without the deep link.
+            NSLog("[NiyahShieldAction] Surrender tapped — opening Niyah blocked screen")
             sharedDefaults.set(true, forKey: Self.pendingSurrenderKey)
             sharedDefaults.synchronize()
-            scheduleSurrenderConfirmPush { [self] scheduled in
-                if !scheduled {
-                    NSLog("[NiyahShieldAction] Push schedule failed — falling back to legacy auto-open")
-                    sharedDefaults.set(true, forKey: Self.surrenderKey)
-                    sharedDefaults.synchronize()
-                    openMainApp(urlString: "niyah://surrender")
-                }
-                completionHandler(.close)
-            }
+            openMainApp(urlString: "niyah://blocked")
+            completionHandler(.close)
             return
 
         @unknown default:

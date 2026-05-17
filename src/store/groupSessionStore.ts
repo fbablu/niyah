@@ -42,7 +42,12 @@ import {
   startLiveActivity,
   updateLiveActivity,
   endLiveActivity,
+  stopBlocking,
 } from "../config/screentime";
+import {
+  scheduleSessionEndNotification,
+  cancelSessionEndNotification,
+} from "../config/notifications";
 import type { LiveActivityLeaderboardEntry } from "../../modules/niyah-screentime";
 
 // Participants are provided without the fields the store sets internally.
@@ -480,6 +485,43 @@ export const useGroupSessionStore = create<GroupSessionState>((set, get) => ({
 
     set({ activeGroupSession: session });
 
+    // Local notification at session.endsAt — fires whether the app is in the
+    // foreground, backgrounded, or terminated. Cancelled on early end below.
+    scheduleSessionEndNotification(
+      session.endsAt,
+      isSoloSession
+        ? "Your focus block is up."
+        : "Your group session is up — tap to see results.",
+    ).catch((err) =>
+      logger.warn("scheduleSessionEndNotification (group) failed:", err),
+    );
+
+    // Start Live Activity (lock screen banner). The legacy startGroupSession
+    // path is what quick-block + non-Firestore solo sessions use, so without
+    // this call those flows never get a Live Activity. New live-mode
+    // (mirrorToLiveActivity) handles its own start when a Firestore doc lands.
+    {
+      const myId = useAuthStore.getState().user?.id;
+      const me = fullParticipants.find((p) => p.userId === myId);
+      const userColor =
+        useAuthStore.getState().user?.blobAvatar?.colorPreset ?? "forest";
+      const leaderboard = fullParticipants.slice(0, 3).map((p) => ({
+        name: p.name || "Friend",
+        status: "active" as const,
+        violations: 0,
+      }));
+      startLiveActivity({
+        sessionId: session.id,
+        sessionType: isSoloSession ? "solo" : "group",
+        blobAssetName: `blob_${userColor}`,
+        endsAt: session.endsAt.getTime() / 1000,
+        leaderboard: isSoloSession ? [] : leaderboard,
+        userPayoutCents: me?.stakeAmount ?? 0,
+      }).catch((err) =>
+        logger.warn("startLiveActivity (group legacy) failed:", err),
+      );
+    }
+
     // Sync participant names + stake to shared UserDefaults so the shield
     // extension can show dynamic messages like "Sarah and Mike are watching."
     if (fullParticipants.length > 1) {
@@ -590,6 +632,15 @@ export const useGroupSessionStore = create<GroupSessionState>((set, get) => ({
 
     // Clear dynamic shield context now that the session is over
     clearSessionContext().catch(() => {});
+
+    // Clear shields + pending session-end notification. completeGroupSession
+    // may be called from app-background paths (recovery on cold open, push
+    // tap), so we can't rely on active.tsx's onComplete to drop the shield.
+    stopBlocking().catch((err) =>
+      logger.warn("stopBlocking (group complete) failed:", err),
+    );
+    endLiveActivity().catch(() => {});
+    cancelSessionEndNotification().catch(() => {});
 
     set({
       activeGroupSession: null,

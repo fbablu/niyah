@@ -25,6 +25,10 @@ import {
   startLiveActivity,
   endLiveActivity,
 } from "../config/screentime";
+import {
+  scheduleSessionEndNotification,
+  cancelSessionEndNotification,
+} from "../config/notifications";
 import { generateId } from "../utils/id";
 import { logger } from "../utils/logger";
 import { logEvent } from "../utils/analytics";
@@ -125,6 +129,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }).catch((err) => logger.warn("startLiveActivity (solo) failed:", err));
     }
 
+    // Local notification fires at session.endsAt even if app is backgrounded.
+    // Cancelled on completeSession/surrenderSession so a manually-ended session
+    // never leaves a stale push pending.
+    scheduleSessionEndNotification(
+      session.endsAt,
+      "Tap to collect your stake.",
+    ).catch((err) =>
+      logger.warn("scheduleSessionEndNotification failed:", err),
+    );
+
     // Listen for surrender requests from the custom shield screen.
     // If the user taps "Surrender Session" on the Niyah shield while a
     // blocked app is open, the ShieldActionExtension writes a flag to
@@ -199,6 +213,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     endLiveActivity().catch((err) =>
       logger.warn("endLiveActivity (surrender) failed:", err),
     );
+    cancelSessionEndNotification().catch(() => {});
 
     // Clean up violation listener
     _unsubViolation?.();
@@ -211,19 +226,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionHistory: [completedSession, ...sessionHistory],
     });
 
-    // Update session doc in Firestore (fire-and-forget).
-    // actualPayout is written by Cloud Functions only — not sent from client.
-    updateSession(currentSession.id, {
-      status: "surrendered",
-      completedAt,
-    }).catch((err) =>
-      logger.error("Failed to update session in Firestore:", err),
-    );
-
-    // Sync to server (non-blocking — local state is source of truth in DEMO_MODE).
-    // On first surrender the server refunds up to $5; when it does, credit the
-    // wallet locally and expose lastForgivenCents for the Complete screen.
-    if (!DEMO_MODE) {
+    // Status update path differs by mode:
+    //   - DEMO_MODE: client writes status=surrendered directly (no CF).
+    //   - prod: cloudForfeit's transaction does the update server-side.
+    //     Writing here would race the CF's read — it would see status=
+    //     surrendered and reject with 400 "Session is not active".
+    if (DEMO_MODE) {
+      updateSession(currentSession.id, {
+        status: "surrendered",
+        completedAt,
+      }).catch((err) =>
+        logger.error("Failed to update session in Firestore:", err),
+      );
+    } else {
       cloudForfeit(currentSession.id, currentSession.stakeAmount)
         .then((result) => {
           if (!result?.forgiven) return;
@@ -277,6 +292,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     endLiveActivity().catch((err) =>
       logger.warn("endLiveActivity (complete) failed:", err),
     );
+    cancelSessionEndNotification().catch(() => {});
 
     // Clean up violation listener
     _unsubViolation?.();
@@ -383,6 +399,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         set((state) => ({
           sessionHistory: [completedSession, ...state.sessionHistory],
         }));
+
+        // Clear any shields that lingered because the DeviceActivityMonitor
+        // schedule isn't wired to the session duration yet — without these
+        // calls the user reopens Niyah to find apps still blocked.
+        stopBlocking().catch((err) =>
+          logger.warn("stopBlocking (recovery) failed:", err),
+        );
+        endLiveActivity().catch(() => {});
+        cancelSessionEndNotification().catch(() => {});
 
         if (!DEMO_MODE) {
           cloudComplete(activeSession.id, activeSession.stakeAmount).catch(

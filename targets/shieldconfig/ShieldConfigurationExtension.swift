@@ -134,7 +134,7 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
             ),
             primaryButtonBackgroundColor: primaryGreen,
             secondaryButtonLabel: ShieldConfiguration.Label(
-                text: "Unlock & forfeit stake",
+                text: "Open Niyah →",
                 color: dangerRed
             )
         )
