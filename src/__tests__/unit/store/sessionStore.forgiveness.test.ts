@@ -104,7 +104,7 @@ describe("sessionStore — first-surrender forgiveness", () => {
 
     useSessionStore.getState().surrenderSession();
     // Flush both the cloudForfeit promise and its .then()
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
 
     expect(useSessionStore.getState().lastForgivenCents).toBe(500);
     expect(useWalletStore.getState().balance).toBe(
@@ -122,7 +122,7 @@ describe("sessionStore — first-surrender forgiveness", () => {
     useSessionStore.getState().startSession("hour");
     const stake = CADENCES.hour.stake;
     useSessionStore.getState().surrenderSession();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
 
     expect(useSessionStore.getState().lastForgivenCents).toBeNull();
     expect(useWalletStore.getState().balance).toBe(INITIAL_BALANCE - stake);
@@ -135,7 +135,7 @@ describe("sessionStore — first-surrender forgiveness", () => {
 
     useSessionStore.getState().startSession("hour");
     useSessionStore.getState().surrenderSession();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
 
     expect(useSessionStore.getState().lastForgivenCents).toBeNull();
     expect(useAuthStore.getState().user?.firstSurrenderForgiven).toBe(false);
@@ -149,7 +149,7 @@ describe("sessionStore — first-surrender forgiveness", () => {
     });
     useSessionStore.getState().startSession("hour");
     useSessionStore.getState().surrenderSession();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
     expect(useSessionStore.getState().lastForgivenCents).toBe(500);
 
     useSessionStore.getState().startSession("focus");
