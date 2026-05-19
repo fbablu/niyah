@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { View, Text, StyleSheet, Pressable, Alert } from "react-native";
+import { View, Text, StyleSheet, Pressable } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import {
   Typography,
@@ -14,6 +14,7 @@ import {
   Button,
   SessionScreenScaffold,
   withErrorBoundary,
+  StatusBanner,
 } from "../../src/components";
 import * as Haptics from "expo-haptics";
 import { usePartnerStore } from "../../src/store/partnerStore";
@@ -269,7 +270,7 @@ function ConfirmSessionScreenInner() {
         const message =
           error instanceof Error ? error.message : "Could not start session.";
         logger.warn("startSoloSession failed:", error);
-        Alert.alert("Cannot Start Session", message);
+        StatusBanner.show({ severity: "error", message });
         return;
       }
       // startSession() in sessionStore already fires startBlocking() internally.

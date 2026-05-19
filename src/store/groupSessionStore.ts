@@ -36,7 +36,19 @@ import {
   subscribeToActiveGroupSessions,
 } from "../config/firebase";
 import { logger } from "../utils/logger";
-import { setSessionContext, clearSessionContext } from "../config/screentime";
+import {
+  setSessionContext,
+  clearSessionContext,
+  startLiveActivity,
+  updateLiveActivity,
+  endLiveActivity,
+  stopBlocking,
+} from "../config/screentime";
+import {
+  scheduleSessionEndNotification,
+  cancelSessionEndNotification,
+} from "../config/notifications";
+import type { LiveActivityLeaderboardEntry } from "../../modules/niyah-screentime";
 
 // Participants are provided without the fields the store sets internally.
 type NewParticipant = Omit<
@@ -138,6 +150,92 @@ let _subscribedInvitesUid: string | null = null;
 let _unsubActiveSessions: (() => void) | null = null;
 let _subscribedActiveSessionsUid: string | null = null;
 
+// ─── Live Activity transition tracking ──────────────────────────────────────
+// Tracks the last status we mirrored to the iOS Live Activity so we know
+// when to call start (null → active) vs update (active tick) vs end (active
+// → terminal). Lives outside the store because it represents an external
+// side-effect handle, not user-visible state.
+let _liveActivityStartedFor: string | null = null;
+
+function buildLeaderboard(
+  doc: GroupSessionDoc,
+): LiveActivityLeaderboardEntry[] {
+  return Object.values(doc.participants)
+    .map((p) => ({
+      name: p.name || "Friend",
+      status: p.surrendered
+        ? ("surrendered" as const)
+        : p.completed
+          ? ("completed" as const)
+          : ("active" as const),
+      violations: p.violationCount ?? 0,
+    }))
+    .slice(0, 3);
+}
+
+function optimisticUserPayoutCents(doc: GroupSessionDoc): number {
+  const myId = useAuthStore.getState().user?.id;
+  if (!myId) return 0;
+  const me = doc.participants[myId];
+  if (!me || me.surrendered) return 0;
+  // Optimistic = full pool / active participant count. Cloud Function does
+  // the authoritative settlement on completion.
+  const active = Object.values(doc.participants).filter(
+    (p) => !p.surrendered,
+  ).length;
+  if (active <= 0) return 0;
+  return Math.floor(doc.poolTotal / active);
+}
+
+/**
+ * Reflect each Firestore session-doc update to the iOS Live Activity.
+ * Start on first "active" transition, update on subsequent ticks, end
+ * when the session leaves "active". The native side is a no-op when
+ * Lane B is disabled or ActivityKit isn't available.
+ */
+function mirrorToLiveActivity(doc: GroupSessionDoc): void {
+  const endsAtSec = doc.endsAt ? doc.endsAt.getTime() / 1000 : 0;
+  if (!endsAtSec) {
+    // No endsAt means session hasn't started — nothing to mirror yet.
+    return;
+  }
+
+  const isActive = doc.status === "active";
+  const leaderboard = buildLeaderboard(doc);
+  const userPayoutCents = optimisticUserPayoutCents(doc);
+
+  if (isActive && _liveActivityStartedFor !== doc.id) {
+    const userColor =
+      useAuthStore.getState().user?.blobAvatar?.colorPreset ?? "forest";
+    _liveActivityStartedFor = doc.id;
+    startLiveActivity({
+      sessionId: doc.id,
+      sessionType: "group",
+      blobAssetName: `blob_${userColor}`,
+      endsAt: endsAtSec,
+      leaderboard,
+      userPayoutCents,
+    }).catch((err) => logger.warn("startLiveActivity (group) failed:", err));
+    return;
+  }
+
+  if (isActive && _liveActivityStartedFor === doc.id) {
+    updateLiveActivity({
+      endsAt: endsAtSec,
+      leaderboard,
+      userPayoutCents,
+    }).catch((err) => logger.warn("updateLiveActivity (group) failed:", err));
+    return;
+  }
+
+  if (!isActive && _liveActivityStartedFor === doc.id) {
+    _liveActivityStartedFor = null;
+    endLiveActivity().catch((err) =>
+      logger.warn("endLiveActivity (group) failed:", err),
+    );
+  }
+}
+
 // ─── Store interface ────────────────────────────────────────────────────────
 
 interface GroupSessionState {
@@ -229,9 +327,15 @@ export const useGroupSessionStore = create<GroupSessionState>((set, get) => ({
     _subscribedSessionId = sessionId;
     _unsubSession = subscribeToGroupSession(sessionId, (data) => {
       if (data) {
-        set({ activeSession: parseGroupSessionDoc(data) });
+        const doc = parseGroupSessionDoc(data);
+        set({ activeSession: doc });
+        mirrorToLiveActivity(doc);
       } else {
         set({ activeSession: null });
+        if (_liveActivityStartedFor) {
+          endLiveActivity().catch(() => {});
+          _liveActivityStartedFor = null;
+        }
       }
     });
   },
@@ -381,6 +485,43 @@ export const useGroupSessionStore = create<GroupSessionState>((set, get) => ({
 
     set({ activeGroupSession: session });
 
+    // Local notification at session.endsAt — fires whether the app is in the
+    // foreground, backgrounded, or terminated. Cancelled on early end below.
+    scheduleSessionEndNotification(
+      session.endsAt,
+      isSoloSession
+        ? "Your focus block is up."
+        : "Your group session is up — tap to see results.",
+    ).catch((err) =>
+      logger.warn("scheduleSessionEndNotification (group) failed:", err),
+    );
+
+    // Start Live Activity (lock screen banner). The legacy startGroupSession
+    // path is what quick-block + non-Firestore solo sessions use, so without
+    // this call those flows never get a Live Activity. New live-mode
+    // (mirrorToLiveActivity) handles its own start when a Firestore doc lands.
+    {
+      const myId = useAuthStore.getState().user?.id;
+      const me = fullParticipants.find((p) => p.userId === myId);
+      const userColor =
+        useAuthStore.getState().user?.blobAvatar?.colorPreset ?? "forest";
+      const leaderboard = fullParticipants.slice(0, 3).map((p) => ({
+        name: p.name || "Friend",
+        status: "active" as const,
+        violations: 0,
+      }));
+      startLiveActivity({
+        sessionId: session.id,
+        sessionType: isSoloSession ? "solo" : "group",
+        blobAssetName: `blob_${userColor}`,
+        endsAt: session.endsAt.getTime() / 1000,
+        leaderboard: isSoloSession ? [] : leaderboard,
+        userPayoutCents: me?.stakeAmount ?? 0,
+      }).catch((err) =>
+        logger.warn("startLiveActivity (group legacy) failed:", err),
+      );
+    }
+
     // Sync participant names + stake to shared UserDefaults so the shield
     // extension can show dynamic messages like "Sarah and Mike are watching."
     if (fullParticipants.length > 1) {
@@ -491,6 +632,15 @@ export const useGroupSessionStore = create<GroupSessionState>((set, get) => ({
 
     // Clear dynamic shield context now that the session is over
     clearSessionContext().catch(() => {});
+
+    // Clear shields + pending session-end notification. completeGroupSession
+    // may be called from app-background paths (recovery on cold open, push
+    // tap), so we can't rely on active.tsx's onComplete to drop the shield.
+    stopBlocking().catch((err) =>
+      logger.warn("stopBlocking (group complete) failed:", err),
+    );
+    endLiveActivity().catch(() => {});
+    cancelSessionEndNotification().catch(() => {});
 
     set({
       activeGroupSession: null,

@@ -1041,6 +1041,8 @@ function FriendsScreenInner() {
         ListHeaderComponent={listHeader}
         ListEmptyComponent={listEmpty}
         contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       />
     </SafeAreaView>
   );

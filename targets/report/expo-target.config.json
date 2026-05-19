@@ -1,0 +1,9 @@
+{
+  "type": "device-activity-report",
+  "bundleIdentifier": ".device-activity-report",
+  "deploymentTarget": "16.0",
+  "entitlements": {
+    "com.apple.developer.family-controls": true,
+    "com.apple.security.application-groups": ["group.com.niyah.app"]
+  }
+}

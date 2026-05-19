@@ -1,4 +1,4 @@
-import { SessionParticipant } from "../types";
+import { GroupSessionDoc, SessionParticipant } from "../types";
 import { SOLO_COMPLETION_MULTIPLIER } from "../constants/config";
 
 export interface ParticipantResult {
@@ -121,4 +121,77 @@ export const calculateTransfers = (
   }
 
   return transfers;
+};
+
+export interface OptimisticPayoutRow {
+  userId: string;
+  // Even split share of pool if this participant completes given current state.
+  // Surrendered participants get 0.
+  estimatedPayout: number; // in cents
+  share: number; // 0..1
+  status: "focused" | "completed" | "surrendered";
+}
+
+/**
+ * Live, optimistic payout preview that updates as participants surrender or
+ * complete during an active group session. Mirrors the settlement logic in
+ * `calculatePayouts` (even split among completers) but treats still-focused
+ * participants as future completers so each remaining player sees their
+ * upside grow when someone caves.
+ *
+ * Server-side `distributeGroupPayouts` is the authoritative settlement; this
+ * is purely for in-session UI motivation.
+ */
+export const optimisticGroupPayouts = (
+  session: Pick<GroupSessionDoc, "stakePerParticipant" | "participants">,
+): OptimisticPayoutRow[] => {
+  const entries = Object.entries(session.participants ?? {});
+  if (entries.length <= 1) {
+    return entries.map(([userId, p]) => ({
+      userId,
+      estimatedPayout: p.completed
+        ? session.stakePerParticipant * SOLO_COMPLETION_MULTIPLIER
+        : p.surrendered
+          ? 0
+          : session.stakePerParticipant * SOLO_COMPLETION_MULTIPLIER,
+      share: p.surrendered ? 0 : 1,
+      status: p.completed
+        ? "completed"
+        : p.surrendered
+          ? "surrendered"
+          : "focused",
+    }));
+  }
+
+  const pool = session.stakePerParticipant * entries.length;
+  const completers = entries.filter(
+    ([, p]) => p.completed || !p.surrendered, // still in the run counts as a future completer
+  );
+  if (completers.length === 0) {
+    return entries.map(([userId, p]) => ({
+      userId,
+      estimatedPayout: 0,
+      share: 0,
+      status: p.completed
+        ? "completed"
+        : p.surrendered
+          ? "surrendered"
+          : "focused",
+    }));
+  }
+  const perCompleter = Math.floor(pool / completers.length);
+
+  return entries.map(([userId, p]) => {
+    const inRun = !p.surrendered;
+    return {
+      userId,
+      estimatedPayout: inRun ? perCompleter : 0,
+      share: inRun ? 1 / completers.length : 0,
+      status: p.completed
+        ? "completed"
+        : p.surrendered
+          ? "surrendered"
+          : "focused",
+    };
+  });
 };

@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView } from "react-native";
+import { View, Text, StyleSheet, Pressable } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import {
@@ -127,16 +128,17 @@ export const SessionScreenScaffold: React.FC<SessionScreenScaffoldProps> = ({
   if (scrollable) {
     return (
       <SafeAreaView style={styles.container}>
-        <ScrollView
+        <KeyboardAwareScrollView
           style={styles.scrollView}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          bottomOffset={20}
         >
           {renderHeader()}
           {renderTitleSection()}
           {children}
-        </ScrollView>
+        </KeyboardAwareScrollView>
         {renderFooter()}
       </SafeAreaView>
     );

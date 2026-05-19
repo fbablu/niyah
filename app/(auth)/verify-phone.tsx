@@ -13,6 +13,7 @@ import { useColors } from "../../src/hooks/useColors";
 import { Button, AuthScreenScaffold } from "../../src/components";
 import { useAuthStore } from "../../src/store/authStore";
 import { logger } from "../../src/utils/logger";
+import { checkOtpThrottle } from "../../src/utils/otpThrottle";
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN = 60; // seconds
@@ -28,6 +29,23 @@ export default function VerifyPhoneScreen() {
   const [error, setError] = useState("");
   const [resendTimer, setResendTimer] = useState(RESEND_COOLDOWN);
   const inputRef = useRef<TextInput>(null);
+
+  // Sync the resend cooldown with the persisted throttle so a hot restart
+  // doesn't reset to 60s and let the user blast through Firebase's quota.
+  useEffect(() => {
+    if (!params.phone) return;
+    let cancelled = false;
+    (async () => {
+      const decision = await checkOtpThrottle(params.phone);
+      if (cancelled) return;
+      if (!decision.allowed && decision.retryAfterMs) {
+        setResendTimer(Math.ceil(decision.retryAfterMs / 1000));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [params.phone]);
 
   // Resend countdown timer
   useEffect(() => {
@@ -93,7 +111,14 @@ export default function VerifyPhoneScreen() {
       setError("");
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (e: unknown) {
-      const err = e as { message?: string };
+      const err = e as {
+        message?: string;
+        code?: string;
+        retryAfterMs?: number;
+      };
+      if (err?.code === "niyah/otp-throttled" && err.retryAfterMs) {
+        setResendTimer(Math.ceil(err.retryAfterMs / 1000));
+      }
       setError(err?.message || "Failed to resend code.");
     }
   };

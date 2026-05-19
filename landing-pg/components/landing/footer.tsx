@@ -75,7 +75,7 @@ export function Footer() {
               </p>
               <nav className="flex flex-col gap-2">
                 <Link
-                  href="https://github.com/SySyAli/niyah"
+                  href="https://github.com/fbablu/niyah"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -91,7 +91,7 @@ export function Footer() {
           <p>&copy; {new Date().getFullYear()} Niyah. All rights reserved.</p>
           <div className="flex flex-col gap-1 md:flex-row md:items-center md:gap-4">
             <Link
-              href="https://github.com/SySyAli/niyah"
+              href="https://github.com/fbablu/niyah"
               target="_blank"
               rel="noopener noreferrer"
               className="transition-colors hover:text-foreground"

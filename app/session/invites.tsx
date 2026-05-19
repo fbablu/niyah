@@ -6,7 +6,6 @@ import {
   Pressable,
   ScrollView,
   Image,
-  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, type RelativePathString } from "expo-router";
@@ -18,7 +17,12 @@ import {
   type ThemeColors,
 } from "../../src/constants/colors";
 import { useColors } from "../../src/hooks/useColors";
-import { Card, Button, withErrorBoundary } from "../../src/components";
+import {
+  Card,
+  Button,
+  withErrorBoundary,
+  StatusBanner,
+} from "../../src/components";
 import { useAuthStore } from "../../src/store/authStore";
 import { useGroupSessionStore } from "../../src/store/groupSessionStore";
 import { useWalletStore } from "../../src/store/walletStore";
@@ -70,10 +74,10 @@ function GroupInvitesScreenInner() {
           `/session/waiting-room?sessionId=${invite.sessionId}` as RelativePathString,
         );
       } catch (err) {
-        Alert.alert(
-          "Could Not Accept",
-          getFunctionErrorMessage(err, "Failed to accept invite."),
-        );
+        StatusBanner.show({
+          severity: "error",
+          message: getFunctionErrorMessage(err, "Could not accept invite."),
+        });
       } finally {
         setLoadingAccept(null);
       }
@@ -87,10 +91,13 @@ function GroupInvitesScreenInner() {
       try {
         await declineInvite(inviteId);
       } catch (err) {
-        Alert.alert(
-          "Could Not Decline",
-          getFunctionErrorMessage(err, "Please try again."),
-        );
+        StatusBanner.show({
+          severity: "error",
+          message: getFunctionErrorMessage(
+            err,
+            "Could not decline invite. Please try again.",
+          ),
+        });
       } finally {
         setLoadingDecline(null);
       }

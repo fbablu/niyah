@@ -18,6 +18,16 @@ Auth state managed by `authStore.ts`, which listens to Firebase `onAuthStateChan
 
 **Key files**: `src/config/firebase.ts` (auth helpers), `src/store/authStore.ts`, `app/(auth)/`
 
+### Multi-Provider Account Linking
+
+A returning user who first signed up by phone and later taps "Sign in with Google" must land on the same `uid` if the Google email matches the phone-owner's verified email. The auth store consults Firestore for an existing user whose verified `phoneNumber` or `email` matches before creating a new account, then calls Firebase `linkWithCredential` so all providers attach to the original user record. Source-of-truth profile fields (`displayName`, `email`, `phoneNumber`) are read directly from `firebase.auth().currentUser` on every profile save to keep the auth user and Firestore doc consistent. Migration of pre-link duplicates is handled by the admin-only `mergeDuplicateUsers` Cloud Function; merged wallets and `migrations/{date}` audit entry per merge.
+
+See [post-demo-roadmap.md Lane A](./post-demo-roadmap.md#lane-a--auth-identity-profile-keyboard-3-days) for the rollout plan.
+
+### Phone OTP Throttle
+
+In addition to Firebase's server-side rate limits, the client persists `{ lastSentAt, sendCount, windowStart }` in secure storage. Five sends per phone per hour, then exponential backoff (30s → 2m → 5m). `auth/too-many-requests` errors get pinned in UI so a retry loop can't burn the user's Firebase quota. App Check is moving from soft-fail to enforce on auth-related Cloud Functions to reduce the abusive-traffic flags that triggered the testing-phase 15-minute lockouts.
+
 ## Session Modes
 
 ### Solo Session
@@ -57,6 +67,22 @@ One-tap app blocking without money. User picks a duration (25 min / 1 hr / 2 hr 
 6. 9 FCM push notification types for real-time group coordination
 
 **Status**: Full stack complete — 7 Cloud Functions deployed, real-time Firestore listeners, Stripe escrow, custom shield blocking.
+
+### Group Equity (Cap-Target Payout)
+
+Even-split among completers is unfair when participant baselines differ. The post-demo cap-target model gives every user a Strava-style target (`baseline × CAP_FACTOR`, default 0.5) verified by the `NiyahDeviceActivityReport` extension. Under-cap completers earn their full share of the pool; over-cap completers earn a linearly scaled share; 2× cap counts as a payout-zero (stake refunded, no forfeit). Full design in [group-equity.md](./group-equity.md).
+
+### Live Activities (Lock Screen + Dynamic Island)
+
+`NiyahLiveActivity` widget extension renders the running session on the lock screen (timer + blob + top-3 leaderboard with status dots & violation counts) and in Dynamic Island (compact: timer + blob; expanded: 3-row leaderboard). Wired from `sessionStore` / `groupSessionStore` — start on session begin, update on every Firestore session-doc tick, end on complete or surrender. See [native-modules.md](./native-modules.md#niyahliveactivity).
+
+### Screen-Time Baseline + Priorities
+
+Onboarding moves past Apple's stock `FamilyActivityPicker`: users pick all categories to monitor, then 24h later return to `screentime-priorities.tsx` where they see ranked apps (top usage first, "8h avg" badge style) and assign each one a mode — "block hard / block sometimes / track only". Persisted to `users/{uid}.screenTimeProfile`. Powered by the `NiyahDeviceActivityReport` extension and `getScreenTimeBaseline()` bridge.
+
+### Per-App Shield Variants
+
+`ShieldConfigurationExtension` branches on `application.token` and `category.token` to render five visual variants (social, video, gaming, news, default) with category-matched pep-talk copy and 20+ rotating quotes keyed by `Calendar.minute`. The previous generic shield stays as fallback. Shield surrender is now two-step: tap "Unlock & forfeit" → push notification → tap push → in-app confirm sheet (HoldToConfirmModal). Removes the single-tap forfeit footgun.
 
 ## Wallet & Transactions
 

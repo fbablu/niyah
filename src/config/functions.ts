@@ -225,6 +225,29 @@ export async function linkBankAccount(
   );
 }
 
+/**
+ * Detaches the linked bank from Stripe, invalidates the Plaid item, and
+ * clears the `linkedBank` field on the user. Idempotent.
+ */
+export async function unlinkBankAccount(): Promise<{ success: boolean }> {
+  return callFunction<{ success: boolean }>("unlinkBankAccount", {});
+}
+
+/**
+ * Atomic bank swap. New bank is attached and validated first; the old bank
+ * is only detached after the new one succeeds. Same response shape as
+ * linkBankAccount.
+ */
+export async function replaceBankAccount(
+  publicToken: string,
+  accountId: string,
+): Promise<{ success: boolean; bankName: string; bankMask: string }> {
+  return callFunction<{ success: boolean; bankName: string; bankMask: string }>(
+    "replaceBankAccount",
+    { publicToken, accountId },
+  );
+}
+
 export interface WithdrawalResult {
   success: boolean;
   transferId: string;
@@ -307,6 +330,35 @@ export async function unfollowUserCF(
   targetUid: string,
 ): Promise<{ success: boolean }> {
   return callFunction<{ success: boolean }>("unfollowUserFn", { targetUid });
+}
+
+// ─── Account merge detection ────────────────────────────────────────────────
+
+export type AccountMergeResponse =
+  | { status: "no_verified_contact" }
+  | { status: "no_match" }
+  | { status: "self_match" }
+  | {
+      status: "merge";
+      role: "duplicate";
+      canonicalUid: string;
+      matchedField: "phone" | "email";
+    }
+  | {
+      status: "merge";
+      role: "canonical";
+      duplicateUid: string;
+      matchedField: "phone" | "email";
+    };
+
+/**
+ * Server-side duplicate-account detector. Replaces the previous client-side
+ * Firestore queries on user phone/email — those leaked an enumeration vector
+ * AND trusted user-writable profile fields. The CF uses Firebase Auth admin
+ * SDK lookups, which are immune to phone-squat in the Firestore mirror.
+ */
+export async function requestAccountMerge(): Promise<AccountMergeResponse> {
+  return callFunction<AccountMergeResponse>("requestAccountMerge", {});
 }
 
 // ─── Legal acceptance functions ──────────────────────────────────────────────

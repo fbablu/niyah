@@ -1,10 +1,16 @@
 import {
   calculatePayouts,
   calculateTransfers,
+  optimisticGroupPayouts,
   type ParticipantResult,
   type ParticipantPayout,
 } from "../../../utils/payoutAlgorithm";
-import type { SessionParticipant } from "../../../types";
+import type {
+  GroupSessionDoc,
+  GroupSessionParticipant,
+  SessionParticipant,
+  UserReputation,
+} from "../../../types";
 
 const makeParticipant = (
   userId: string,
@@ -302,5 +308,192 @@ describe("calculateTransfers", () => {
       .filter((t) => t.toUserId === "a")
       .reduce((sum, t) => sum + t.amount, 0);
     expect(aliceReceived).toBe(100);
+  });
+});
+
+// ─── optimisticGroupPayouts ──────────────────────────────────────────────────
+//
+// Drives the live "if you finish, you'd take home $X" preview on the active
+// session leaderboard. The function is intentionally permissive about future
+// completers — still-focused participants are projected as if they will
+// complete. The server runs the authoritative `calculatePayouts` at settle
+// time; these tests pin the optimistic-side math so the UI can't drift away
+// from the eventual server result.
+
+const DEFAULT_REP: UserReputation = {
+  score: 50,
+  level: "sapling",
+  paymentsCompleted: 0,
+  paymentsMissed: 0,
+  totalOwedPaid: 0,
+  totalOwedMissed: 0,
+  lastUpdated: new Date(),
+};
+
+const participant = (
+  override: Partial<GroupSessionParticipant> & { name: string },
+): GroupSessionParticipant => ({
+  accepted: true,
+  online: true,
+  reputation: DEFAULT_REP,
+  ...override,
+});
+
+const session = (
+  stakePerParticipant: number,
+  participants: Record<string, GroupSessionParticipant>,
+): Pick<GroupSessionDoc, "stakePerParticipant" | "participants"> => ({
+  stakePerParticipant,
+  participants,
+});
+
+describe("optimisticGroupPayouts", () => {
+  it("solo focused → projects 2x stake payout", () => {
+    const rows = optimisticGroupPayouts(
+      session(2000, { me: participant({ name: "Me" }) }),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      userId: "me",
+      estimatedPayout: 4000,
+      share: 1,
+      status: "focused",
+    });
+  });
+
+  it("solo completed → keeps 2x projection (already won)", () => {
+    const rows = optimisticGroupPayouts(
+      session(2000, { me: participant({ name: "Me", completed: true }) }),
+    );
+    expect(rows[0]).toMatchObject({
+      estimatedPayout: 4000,
+      status: "completed",
+    });
+  });
+
+  it("solo surrendered → 0 payout, 0 share, surrendered status", () => {
+    const rows = optimisticGroupPayouts(
+      session(2000, { me: participant({ name: "Me", surrendered: true }) }),
+    );
+    expect(rows[0]).toMatchObject({
+      estimatedPayout: 0,
+      share: 0,
+      status: "surrendered",
+    });
+  });
+
+  it("group all focused → pool splits equally", () => {
+    const rows = optimisticGroupPayouts(
+      session(1000, {
+        a: participant({ name: "A" }),
+        b: participant({ name: "B" }),
+        c: participant({ name: "C" }),
+      }),
+    );
+    rows.forEach((r) => {
+      expect(r.estimatedPayout).toBe(1000); // 3 * 1000 / 3
+      expect(r.share).toBeCloseTo(1 / 3);
+      expect(r.status).toBe("focused");
+    });
+  });
+
+  it("group with one surrender → remaining members split pool, surrendered zeros out", () => {
+    // Pool = 3 * 1000 = 3000. Surrendered participant excluded from completers
+    // count → 2 remaining → 1500 each.
+    const rows = optimisticGroupPayouts(
+      session(1000, {
+        a: participant({ name: "A" }),
+        b: participant({ name: "B" }),
+        c: participant({ name: "C", surrendered: true }),
+      }),
+    );
+    const byUid = Object.fromEntries(rows.map((r) => [r.userId, r]));
+    expect(byUid.a.estimatedPayout).toBe(1500);
+    expect(byUid.b.estimatedPayout).toBe(1500);
+    expect(byUid.c.estimatedPayout).toBe(0);
+    expect(byUid.c.status).toBe("surrendered");
+    expect(byUid.c.share).toBe(0);
+  });
+
+  it("group all surrendered → everyone zeroed (pool to Niyah)", () => {
+    const rows = optimisticGroupPayouts(
+      session(1000, {
+        a: participant({ name: "A", surrendered: true }),
+        b: participant({ name: "B", surrendered: true }),
+      }),
+    );
+    rows.forEach((r) => {
+      expect(r.estimatedPayout).toBe(0);
+      expect(r.share).toBe(0);
+      expect(r.status).toBe("surrendered");
+    });
+  });
+
+  it("estimated payouts never exceed the total pool", () => {
+    // Property test: regardless of who surrenders, sum of estimated payouts
+    // ≤ pool. Catches off-by-one or floor() regressions.
+    const stake = 1000;
+    const scenarios: Array<Partial<GroupSessionParticipant>[]> = [
+      [{}, {}, {}, {}],
+      [{ surrendered: true }, {}, {}, {}],
+      [{ surrendered: true }, { surrendered: true }, {}, {}],
+      [{ completed: true }, {}, { surrendered: true }, {}],
+    ];
+    for (const scenario of scenarios) {
+      const participants: Record<string, GroupSessionParticipant> = {};
+      scenario.forEach((p, i) => {
+        participants[`p${i}`] = participant({ name: `P${i}`, ...p });
+      });
+      const rows = optimisticGroupPayouts(session(stake, participants));
+      const total = rows.reduce((acc, r) => acc + r.estimatedPayout, 0);
+      const pool = stake * scenario.length;
+      expect(total).toBeLessThanOrEqual(pool);
+    }
+  });
+
+  it("regression: surrender flips a focused participant's projected payout up", () => {
+    // The leaderboard nudge depends on this: when someone caves, survivors'
+    // projected payout should strictly increase.
+    const before = optimisticGroupPayouts(
+      session(1000, {
+        a: participant({ name: "A" }),
+        b: participant({ name: "B" }),
+        c: participant({ name: "C" }),
+      }),
+    ).find((r) => r.userId === "a")!.estimatedPayout;
+
+    const after = optimisticGroupPayouts(
+      session(1000, {
+        a: participant({ name: "A" }),
+        b: participant({ name: "B" }),
+        c: participant({ name: "C", surrendered: true }),
+      }),
+    ).find((r) => r.userId === "a")!.estimatedPayout;
+
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it("matches server-side calculateGroupSessionPayouts on the all-completed case", () => {
+    // Cross-validate against the (replicated) server math via calculatePayouts.
+    // Both must produce the same per-completer payout — if they drift, the
+    // UI promises something the server won't deliver.
+    const stake = 1000;
+    const ids = ["a", "b", "c", "d"];
+    const optimistic = optimisticGroupPayouts(
+      session(
+        stake,
+        Object.fromEntries(
+          ids.map((id) => [id, participant({ name: id, completed: true })]),
+        ),
+      ),
+    );
+    const server = calculatePayouts(
+      stake,
+      ids.map((id) => ({ userId: id, completed: true })),
+    );
+    optimistic.forEach((r) => {
+      const expected = server.find((s) => s.userId === r.userId)?.payout;
+      expect(r.estimatedPayout).toBe(expected);
+    });
   });
 });

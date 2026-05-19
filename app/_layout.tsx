@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Text, TextInput, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as Linking from "expo-linking";
 import * as SecureStore from "expo-secure-store";
 import { BaseFontFamily } from "../src/constants/colors";
@@ -10,7 +11,7 @@ import { useColors } from "../src/hooks/useColors";
 import { useThemeStore } from "../src/store/themeStore";
 import { useAuthStore } from "../src/store/authStore";
 import { useFeatureFlagsStore } from "../src/store/featureFlagsStore";
-import { ErrorBoundary } from "../src/components";
+import { ErrorBoundary, StatusBannerHost } from "../src/components";
 import { isEmailSignInLink } from "../src/config/firebase";
 import { DEMO_MODE, PENDING_REFERRAL_KEY } from "../src/constants/config";
 import { logger } from "../src/utils/logger";
@@ -182,39 +183,50 @@ export default function RootLayout() {
         <GestureHandlerRootView
           style={{ flex: 1, backgroundColor: Colors.background }}
         >
-          <StatusBar style={theme === "dark" ? "light" : "dark"} />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: Colors.background },
-              animation: "slide_from_right",
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen
-              name="session"
-              options={{
+          <KeyboardProvider>
+            <StatusBar style={theme === "dark" ? "light" : "dark"} />
+            <StatusBannerHost />
+            <Stack
+              screenOptions={{
                 headerShown: false,
-                presentation: "fullScreenModal",
-              }}
-            />
-            <Stack.Screen
-              name="invite"
-              options={{
-                headerShown: false,
-                animation: "slide_from_bottom",
-              }}
-            />
-            <Stack.Screen
-              name="user/[uid]"
-              options={{
-                headerShown: false,
+                contentStyle: { backgroundColor: Colors.background },
                 animation: "slide_from_right",
               }}
-            />
-          </Stack>
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="session"
+                options={{
+                  headerShown: false,
+                  presentation: "fullScreenModal",
+                }}
+              />
+              <Stack.Screen
+                name="invite"
+                options={{
+                  headerShown: false,
+                  animation: "slide_from_bottom",
+                }}
+              />
+              <Stack.Screen
+                name="user/[uid]"
+                options={{
+                  headerShown: false,
+                  animation: "slide_from_right",
+                }}
+              />
+              <Stack.Screen
+                name="screentime-priorities"
+                options={{
+                  headerShown: true,
+                  title: "Screen Time Priorities",
+                  animation: "slide_from_right",
+                }}
+              />
+            </Stack>
+          </KeyboardProvider>
         </GestureHandlerRootView>
       </StripeWrapper>
     </ErrorBoundary>

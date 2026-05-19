@@ -11,6 +11,11 @@ import ManagedSettings
 #if canImport(DeviceActivity)
 import DeviceActivity
 #endif
+// ActivityKit is iOS 16.1+, weak-linked. Live Activity start/update/end
+// methods guard with #available so the module still builds on older targets.
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
 
 // Named store extension — keeps session shields isolated and cleanup simple.
 #if canImport(ManagedSettings)
@@ -50,8 +55,14 @@ public class NiyahScreenTimeModule: Module {
   private static let violationsKey    = "niyah_shield_violations"
   private static let surrenderKey     = "niyah_surrender_requested"
   private static let sessionContextKey = "niyah_session_context"
+  private static let baselineKey       = "niyah_baseline_snapshot"
   private var violationPollTimer: Timer?
   private var lastViolationCount: Int = 0
+
+  // ── Live Activity (iOS 16.1+) ──────────────────────────────────────────────
+  /// Stored as `Any?` because `Activity` is unavailable on iOS < 16.1.
+  /// Typed access is gated through @available computed accessors below.
+  private var _activeLiveActivity: Any?
 
   // ── iOS 16+ state ─────────────────────────────────────────────────────────
   // Stored as `Any?` because the types don't exist on iOS <16.
@@ -347,6 +358,174 @@ public class NiyahScreenTimeModule: Module {
         return true
       }
       return false
+    }
+
+    // ================================================================
+    // MARK: - DeviceActivityReport baseline (Lane B2)
+    // ================================================================
+
+    /// Read the per-app baseline snapshot the DeviceActivityReport extension
+    /// persisted to shared UserDefaults. Returns an array of dictionaries
+    /// safe to bridge to JS. Empty array means the extension hasn't yet had
+    /// a chance to aggregate data (typically requires 24h after first
+    /// authorization for meaningful values).
+    Function("getScreenTimeBaseline") { [weak self] () -> [[String: Any]] in
+      guard let self = self else { return [] }
+      guard let data = self.sharedDefaults.data(forKey: Self.baselineKey),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let appsRaw = json["apps"] as? [[String: Any]]
+      else { return [] }
+      return appsRaw
+    }
+
+    // ================================================================
+    // MARK: - Live Activity (Lane B7)
+    // ================================================================
+    //
+    // ActivityKit requires iOS 16.1+. Every method guards with #available
+    // so calls from JS on older devices return without error (no-op). The
+    // main app's Info.plist must also set NSSupportsLiveActivities=YES,
+    // which the withLiveActivity Expo plugin handles at prebuild time.
+
+    /// Start a Live Activity for an in-progress focus session. Called from
+    /// `sessionStore.startSession` and `groupSessionStore.startSession`.
+    /// `attrsJson` is the stringified JSON of:
+    ///   { sessionId, sessionType: "solo"|"group", blobAssetName,
+    ///     endsAt, leaderboard: [{name,status,violations}], userPayoutCents }
+    AsyncFunction("startLiveActivity") { [weak self] (attrsJson: String) -> Bool in
+      guard let self = self else { return false }
+      #if canImport(ActivityKit)
+      guard #available(iOS 16.1, *) else { return false }
+      guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+        NSLog("[NiyahScreenTime] Live Activities disabled by user")
+        return false
+      }
+
+      guard let data = attrsJson.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let sessionId = json["sessionId"] as? String,
+            let sessionType = json["sessionType"] as? String,
+            let endsAt = json["endsAt"] as? Double
+      else {
+        NSLog("[NiyahScreenTime] startLiveActivity: bad JSON")
+        return false
+      }
+
+      let blobAssetName = (json["blobAssetName"] as? String) ?? "blob_default"
+      let userPayoutCents = (json["userPayoutCents"] as? Int) ?? 0
+      let leaderboardRaw = (json["leaderboard"] as? [[String: Any]]) ?? []
+      let leaderboard = leaderboardRaw.compactMap { row -> NiyahActivityAttributes.LeaderboardEntry? in
+        guard let name = row["name"] as? String,
+              let status = row["status"] as? String,
+              let violations = row["violations"] as? Int
+        else { return nil }
+        return NiyahActivityAttributes.LeaderboardEntry(
+          name: name, status: status, violations: violations
+        )
+      }
+
+      let attributes = NiyahActivityAttributes(
+        sessionId: sessionId,
+        sessionType: sessionType,
+        blobAssetName: blobAssetName
+      )
+      let contentState = NiyahActivityAttributes.ContentState(
+        endsAt: endsAt,
+        leaderboard: leaderboard,
+        userPayoutCents: userPayoutCents
+      )
+
+      do {
+        let activity: Activity<NiyahActivityAttributes>
+        if #available(iOS 16.2, *) {
+          // iOS 16.2+ prefers `ActivityContent` wrapper with stale date.
+          activity = try Activity.request(
+            attributes: attributes,
+            content: ActivityContent(state: contentState, staleDate: nil),
+            pushType: nil
+          )
+        } else {
+          activity = try Activity.request(
+            attributes: attributes,
+            contentState: contentState,
+            pushType: nil
+          )
+        }
+        self._activeLiveActivity = activity
+        NSLog("[NiyahScreenTime] Live Activity started: \(activity.id)")
+        return true
+      } catch {
+        NSLog("[NiyahScreenTime] Live Activity start failed: \(error)")
+        return false
+      }
+      #else
+      return false
+      #endif
+    }
+
+    /// Update the active Live Activity's content state. `stateJson` is the
+    /// stringified JSON of: { endsAt, leaderboard, userPayoutCents }.
+    /// Pushed on each Firestore session-doc tick from the JS side.
+    AsyncFunction("updateLiveActivity") { [weak self] (stateJson: String) -> Bool in
+      guard let self = self else { return false }
+      #if canImport(ActivityKit)
+      guard #available(iOS 16.1, *) else { return false }
+      guard let activity = self._activeLiveActivity as? Activity<NiyahActivityAttributes>
+      else { return false }
+
+      guard let data = stateJson.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let endsAt = json["endsAt"] as? Double
+      else { return false }
+
+      let userPayoutCents = (json["userPayoutCents"] as? Int) ?? 0
+      let leaderboardRaw = (json["leaderboard"] as? [[String: Any]]) ?? []
+      let leaderboard = leaderboardRaw.compactMap { row -> NiyahActivityAttributes.LeaderboardEntry? in
+        guard let name = row["name"] as? String,
+              let status = row["status"] as? String,
+              let violations = row["violations"] as? Int
+        else { return nil }
+        return NiyahActivityAttributes.LeaderboardEntry(
+          name: name, status: status, violations: violations
+        )
+      }
+
+      let newState = NiyahActivityAttributes.ContentState(
+        endsAt: endsAt,
+        leaderboard: leaderboard,
+        userPayoutCents: userPayoutCents
+      )
+
+      if #available(iOS 16.2, *) {
+        await activity.update(ActivityContent(state: newState, staleDate: nil))
+      } else {
+        await activity.update(using: newState)
+      }
+      return true
+      #else
+      return false
+      #endif
+    }
+
+    /// End the active Live Activity. Called on session complete or surrender.
+    AsyncFunction("endLiveActivity") { [weak self] () -> Bool in
+      guard let self = self else { return false }
+      #if canImport(ActivityKit)
+      guard #available(iOS 16.1, *) else { return false }
+      guard let activity = self._activeLiveActivity as? Activity<NiyahActivityAttributes>
+      else { return false }
+
+      if #available(iOS 16.2, *) {
+        await activity.end(nil, dismissalPolicy: .immediate)
+      } else {
+        await activity.end(dismissalPolicy: .immediate)
+      }
+      self._activeLiveActivity = nil
+      NSLog("[NiyahScreenTime] Live Activity ended")
+      return true
+      #else
+      return false
+      #endif
     }
   }
 

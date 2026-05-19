@@ -30,6 +30,50 @@ import {
 import { logger } from "../utils/logger";
 import { logEvent } from "../utils/analytics";
 import { setSentryUser } from "../config/sentry";
+import {
+  checkOtpThrottle,
+  recordOtpSent,
+  recordHardLockout,
+  clearOtpThrottle,
+  formatRetryAfter,
+} from "../utils/otpThrottle";
+import {
+  checkForAccountMerge,
+  type LinkProvider,
+} from "../utils/accountLinking";
+
+// Detect cross-provider duplicate accounts and enqueue an admin-side merge.
+// Runs after Firebase Auth completes but before profile is built so the
+// rest of the flow doesn't have to know whether the uid is canonical or a
+// soon-to-be-merged duplicate.
+//
+// All trust is server-side: `requestAccountMerge` uses Firebase Auth's
+// verified phone/email (OTP / email-link verified) and ignores the
+// user-writable Firestore mirror. The client only acts on the response.
+async function tryQueueAccountMerge(
+  firebaseUser: FirebaseUser,
+  firestoreData: Record<string, unknown> | null,
+  newAuthProvider: LinkProvider,
+): Promise<void> {
+  // Only ask the server when this looks like a fresh Firebase user. Returning
+  // users with a profile doc don't need a duplicate check on every sign-in.
+  const hasProfile = !!firestoreData;
+  if (hasProfile && !firebaseUser.isNewUser) return;
+
+  const response = await checkForAccountMerge();
+  if (!response) return;
+
+  if (response.status === "merge") {
+    logger.warn(
+      `account_link_candidate: uid=${firebaseUser.uid} role=${response.role} via=${response.matchedField}`,
+    );
+    logEvent("account_merge_queued", {
+      role: response.role,
+      matchedField: response.matchedField,
+      newAuthProvider,
+    });
+  }
+}
 
 // Lazy import to break circular dependency (walletStore imports authStore)
 const hydrateWallet = (uid: string) => {
@@ -211,7 +255,12 @@ const buildUser = (
       },
       venmoHandle: firestoreData.venmoHandle as string | undefined,
       zelleHandle: firestoreData.zelleHandle as string | undefined,
-      phoneNumber: firestoreData.phone as string | undefined,
+      // Prefer Firebase Auth as source of truth — Firestore mirror is
+      // best-effort and can be stale after re-auth flows. Falls back to the
+      // mirrored field only when auth doesn't carry a phone (e.g. user
+      // signed up via Google before adding a phone).
+      phoneNumber:
+        firebaseUser.phoneNumber || (firestoreData.phone as string | undefined),
       authProvider: firestoreData.authProvider as
         | "email"
         | "google"
@@ -361,6 +410,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const firestoreData = await fetchUserProfile(firebaseUser.uid).catch(
         () => null,
       );
+      await tryQueueAccountMerge(firebaseUser, firestoreData, "google");
       const user = buildUser(firebaseUser, firestoreData);
       const profileComplete = user.profileComplete === true;
 
@@ -402,6 +452,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const firestoreData = await fetchUserProfile(firebaseUser.uid).catch(
         () => null,
       );
+      await tryQueueAccountMerge(firebaseUser, firestoreData, "apple");
       const user = buildUser(firebaseUser, firestoreData);
       const profileComplete = user.profileComplete === true;
 
@@ -458,6 +509,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const firestoreData = await fetchUserProfile(firebaseUser.uid).catch(
         () => null,
       );
+      await tryQueueAccountMerge(firebaseUser, firestoreData, "email");
       const user = buildUser(firebaseUser, firestoreData);
       const profileComplete = user.profileComplete === true;
 
@@ -483,12 +535,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   phoneConfirmation: null,
 
   sendPhoneCode: async (phoneNumber: string) => {
+    // Flip isLoading synchronously so any UI waiting on the flag (and the
+    // unit test that observes it on the same tick) sees the in-flight state.
     set({ isLoading: true });
+
+    const decision = await checkOtpThrottle(phoneNumber);
+    if (!decision.allowed) {
+      set({ isLoading: false });
+      const wait = formatRetryAfter(decision.retryAfterMs ?? 60_000);
+      const message =
+        decision.reason === "hard_lockout"
+          ? `Too many code requests. Try again in ${wait}.`
+          : decision.reason === "window_exhausted"
+            ? `You've hit the hourly limit. Try again in ${wait}.`
+            : `Wait ${wait} before requesting another code.`;
+      const err = new Error(message) as Error & {
+        code?: string;
+        retryAfterMs?: number;
+      };
+      err.code = "niyah/otp-throttled";
+      err.retryAfterMs = decision.retryAfterMs;
+      throw err;
+    }
+
     try {
       const confirmation = await sendPhoneVerification(phoneNumber);
+      await recordOtpSent(phoneNumber);
       set({ phoneConfirmation: confirmation, isLoading: false });
     } catch (error) {
       set({ isLoading: false });
+      const code = (error as { code?: string }).code;
+      if (code === "auth/too-many-requests") {
+        await recordHardLockout(phoneNumber);
+      }
       throw error;
     }
   },
@@ -503,10 +582,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const firebaseUser = await confirmPhoneCode(phoneConfirmation, code);
 
+      // Verified — release the OTP throttle so a future re-auth starts clean.
+      if (firebaseUser.phoneNumber) {
+        clearOtpThrottle(firebaseUser.phoneNumber).catch(() => {});
+      }
+
       // Fetch Firestore profile and build user state immediately
       const firestoreData = await fetchUserProfile(firebaseUser.uid).catch(
         () => null,
       );
+      await tryQueueAccountMerge(firebaseUser, firestoreData, "phone");
       const user = buildUser(firebaseUser, firestoreData);
       const profileComplete = user.profileComplete === true;
 

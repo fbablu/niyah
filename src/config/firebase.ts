@@ -268,7 +268,7 @@ export const saveUserProfile = async (
   data: {
     firstName: string;
     lastName: string;
-    email: string;
+    email?: string;
     phone?: string;
     profileImage?: string;
     blobAvatar?: {
@@ -281,37 +281,51 @@ export const saveUserProfile = async (
 ): Promise<void> => {
   const serverTs = serverTimestamp();
 
-  // Strip undefined values — Firestore rejects them
-  const cleanData = Object.fromEntries(
-    Object.entries(data).filter(([, v]) => v !== undefined),
+  // Pull canonical contact + display fields directly from auth so the
+  // Firestore doc never disagrees with Firebase Auth (the source of truth
+  // for verified phone/email). Anything passed in via `data` is only used
+  // as a fallback for providers that don't surface that field.
+  const authUser = authInstance.currentUser;
+  const canonicalEmail = authUser?.email || data.email || "";
+  const canonicalPhone = authUser?.phoneNumber || data.phone || undefined;
+  const canonicalPhotoURL =
+    authUser?.photoURL || data.profileImage || undefined;
+
+  const payload: Record<string, unknown> = {
+    firstName: data.firstName,
+    lastName: data.lastName,
+    email: canonicalEmail,
+    phone: canonicalPhone,
+    profileImage: canonicalPhotoURL,
+    blobAvatar: data.blobAvatar,
+    authProvider: data.authProvider,
+    name: `${data.firstName} ${data.lastName}`.trim(),
+    profileComplete: true,
+    createdAt: serverTs,
+    updatedAt: serverTs,
+    reputation: {
+      score: 50,
+      level: "sapling",
+      paymentsCompleted: 0,
+      paymentsMissed: 0,
+      totalOwedPaid: 0,
+      totalOwedMissed: 0,
+    },
+    stats: {
+      currentStreak: 0,
+      longestStreak: 0,
+      totalSessions: 0,
+      completedSessions: 0,
+      totalEarnings: 0,
+    },
+  };
+
+  // Strip undefined values — Firestore rejects them.
+  const cleanPayload = Object.fromEntries(
+    Object.entries(payload).filter(([, v]) => v !== undefined),
   );
 
-  await setDoc(
-    doc(db, COLLECTIONS.USERS, uid),
-    {
-      ...cleanData,
-      name: `${data.firstName} ${data.lastName}`.trim(),
-      profileComplete: true,
-      createdAt: serverTs,
-      updatedAt: serverTs,
-      reputation: {
-        score: 50,
-        level: "sapling",
-        paymentsCompleted: 0,
-        paymentsMissed: 0,
-        totalOwedPaid: 0,
-        totalOwedMissed: 0,
-      },
-      stats: {
-        currentStreak: 0,
-        longestStreak: 0,
-        totalSessions: 0,
-        completedSessions: 0,
-        totalEarnings: 0,
-      },
-    },
-    { merge: true },
-  );
+  await setDoc(doc(db, COLLECTIONS.USERS, uid), cleanPayload, { merge: true });
 
   const walletSnap = await getDoc(doc(db, COLLECTIONS.WALLETS, uid));
 

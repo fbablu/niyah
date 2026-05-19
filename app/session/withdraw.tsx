@@ -495,8 +495,14 @@ function WithdrawScreenInner() {
       }
     >
       <View style={styles.balanceInfo}>
-        <Text style={styles.balanceLabel}>Available Balance</Text>
+        <Text style={styles.balanceLabel}>Available to withdraw</Text>
         <Text style={styles.balanceAmount}>{formatMoney(balance)}</Text>
+        <Text style={styles.balanceHint}>
+          Earned funds are available immediately.
+        </Text>
+        <Text style={styles.balanceCap}>
+          Min $10 · max $10,000 per withdrawal · $25,000 daily cap
+        </Text>
       </View>
 
       <AmountDisplay
@@ -585,6 +591,17 @@ const makeStyles = (Colors: ThemeColors) =>
       fontSize: Typography.titleMedium,
       ...Font.semibold,
       color: Colors.gain,
+    },
+    balanceHint: {
+      fontSize: Typography.labelSmall,
+      color: Colors.textSecondary,
+      marginTop: Spacing.xs,
+      ...Font.medium,
+    },
+    balanceCap: {
+      fontSize: Typography.labelSmall,
+      color: Colors.textMuted,
+      marginTop: 2,
     },
     errorText: {
       textAlign: "center",

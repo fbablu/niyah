@@ -18,12 +18,14 @@ import {
   HoldToConfirmModal,
 } from "../../src/components";
 import * as Haptics from "expo-haptics";
+import Animated, { LinearTransition } from "react-native-reanimated";
 import { useGroupSessionStore } from "../../src/store/groupSessionStore";
 import { useSessionStore } from "../../src/store/sessionStore";
 import { useAuthStore } from "../../src/store/authStore";
 import { useCountdown } from "../../src/hooks/useCountdown";
 import { formatMoney } from "../../src/utils/format";
 import { SOLO_COMPLETION_MULTIPLIER } from "../../src/constants/config";
+import { optimisticGroupPayouts } from "../../src/utils/payoutAlgorithm";
 import {
   startBlocking,
   stopBlocking,
@@ -39,7 +41,10 @@ type SessionMode = "solo_quick" | "solo_scheduled" | "solo_staked" | "group";
 
 function ActiveSessionScreenInner() {
   const Colors = useColors();
-  const params = useLocalSearchParams<{ mode?: SessionMode }>();
+  const params = useLocalSearchParams<{
+    mode?: SessionMode;
+    confirmSurrender?: string;
+  }>();
   const mode: SessionMode = params.mode ?? "group";
   const isSoloStaked = mode === "solo_staked";
   const styles = useMemo(
@@ -227,6 +232,13 @@ function ActiveSessionScreenInner() {
           color: Colors.loss,
           marginRight: Spacing.sm,
         },
+        participantPayout: {
+          fontSize: Typography.labelSmall,
+          ...Font.semibold,
+          color: Colors.gain,
+          marginRight: Spacing.sm,
+          fontVariant: ["tabular-nums"],
+        },
         participantYouTag: {
           fontSize: Typography.labelSmall,
           color: Colors.textMuted,
@@ -258,6 +270,16 @@ function ActiveSessionScreenInner() {
   const isNavigatingAwayRef = useRef(false);
   const [violationCount, setViolationCount] = useState(0);
   const [surrenderModalVisible, setSurrenderModalVisible] = useState(false);
+
+  // Two-step shield surrender (Lane B5): shield extension fires a push with
+  // category SURRENDER_CONFIRM. Tapping the push deep-links here with
+  // confirmSurrender=true; we open the hold-to-forfeit modal immediately so
+  // the user always confirms intentionally before money moves.
+  useEffect(() => {
+    if (params.confirmSurrender === "true") {
+      setSurrenderModalVisible(true);
+    }
+  }, [params.confirmSurrender]);
 
   // Only use activeSession if it's currently running. A stale completed/cancelled
   // session must not poison derived values — especially sessionEndsAtMs, which
@@ -293,7 +315,7 @@ function ActiveSessionScreenInner() {
   // Live leaderboard rows. For Firestore sessions we read participant status
   // (active/completed/surrendered) and violation counts directly from the
   // synced doc; legacy in-memory sessions just show the participant list.
-  // Current user always rendered first.
+  // Sort order: focused first, surrendered last; current user wins ties.
   const leaderboard = useMemo(() => {
     type Row = {
       userId: string;
@@ -302,7 +324,17 @@ function ActiveSessionScreenInner() {
       surrendered?: boolean;
       violationCount: number;
       isCurrentUser: boolean;
+      estimatedPayout: number;
     };
+
+    // Optimistic per-participant payout — drives the live share preview.
+    const optimistic = effectiveFirestoreSession
+      ? optimisticGroupPayouts(effectiveFirestoreSession)
+      : [];
+    const payoutByUid = new Map(
+      optimistic.map((row) => [row.userId, row.estimatedPayout]),
+    );
+
     let rows: Row[] = [];
     if (effectiveFirestoreSession) {
       rows = Object.entries(effectiveFirestoreSession.participants).map(
@@ -313,6 +345,7 @@ function ActiveSessionScreenInner() {
           surrendered: p.surrendered,
           violationCount: p.violationCount ?? 0,
           isCurrentUser: uid === currentUserId,
+          estimatedPayout: payoutByUid.get(uid) ?? 0,
         }),
       );
     } else if (activeGroupSession) {
@@ -323,9 +356,13 @@ function ActiveSessionScreenInner() {
         surrendered: false,
         violationCount: 0,
         isCurrentUser: p.userId === currentUserId,
+        estimatedPayout: 0,
       }));
     }
     return rows.sort((a, b) => {
+      const aRank = a.surrendered ? 2 : a.completed ? 1 : 0;
+      const bRank = b.surrendered ? 2 : b.completed ? 1 : 0;
+      if (aRank !== bRank) return aRank - bRank;
       if (a.isCurrentUser && !b.isCurrentUser) return -1;
       if (!a.isCurrentUser && b.isCurrentUser) return 1;
       return 0;
@@ -625,6 +662,10 @@ function ActiveSessionScreenInner() {
           totalTime={totalDuration}
           size="medium"
           showProgress={true}
+          mode={isSoloStaked ? "scrubber" : "ring"}
+          onPauseRequested={
+            isSoloStaked ? () => setSurrenderModalVisible(true) : undefined
+          }
         />
       </View>
 
@@ -675,7 +716,11 @@ function ActiveSessionScreenInner() {
                 ? "Done"
                 : "Focused";
             return (
-              <View key={p.userId} style={styles.participantRow}>
+              <Animated.View
+                key={p.userId}
+                layout={LinearTransition.springify().damping(18)}
+                style={styles.participantRow}
+              >
                 <View
                   style={[styles.participantDot, { backgroundColor: dotColor }]}
                 />
@@ -691,8 +736,13 @@ function ActiveSessionScreenInner() {
                     {displayViolations === 1 ? "" : "s"}
                   </Text>
                 )}
+                {!p.surrendered && p.estimatedPayout > 0 && (
+                  <Text style={styles.participantPayout}>
+                    {formatMoney(p.estimatedPayout)}
+                  </Text>
+                )}
                 <Text style={styles.participantStatus}>{statusText}</Text>
-              </View>
+              </Animated.View>
             );
           })}
         </View>

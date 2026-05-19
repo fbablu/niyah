@@ -1,0 +1,10 @@
+{
+  "type": "device-activity-monitor",
+  "bundleIdentifier": ".device-activity-monitor",
+  "deploymentTarget": "16.0",
+  "frameworks": ["ManagedSettings", "FamilyControls"],
+  "entitlements": {
+    "com.apple.developer.family-controls": true,
+    "com.apple.security.application-groups": ["group.com.niyah.app"]
+  }
+}

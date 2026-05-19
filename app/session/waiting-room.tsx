@@ -5,7 +5,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import { View, Text, StyleSheet, Alert, Share, ScrollView } from "react-native";
+import { View, Text, StyleSheet, Share, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import {
@@ -16,7 +16,13 @@ import {
   type ThemeColors,
 } from "../../src/constants/colors";
 import { useColors } from "../../src/hooks/useColors";
-import { Card, Button, withErrorBoundary } from "../../src/components";
+import {
+  Card,
+  Button,
+  withErrorBoundary,
+  StatusBanner,
+  HoldToConfirmModal,
+} from "../../src/components";
 import { useGroupSessionStore } from "../../src/store/groupSessionStore";
 import { useAuthStore } from "../../src/store/authStore";
 import { useWalletStore } from "../../src/store/walletStore";
@@ -247,6 +253,8 @@ function WaitingRoomScreenInner() {
 
   const [countdownMs, setCountdownMs] = useState<number | null>(null);
   const [isStarting, setIsStarting] = useState(false);
+  const [cancelModalVisible, setCancelModalVisible] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   // Prevent calling markOnline more than once per session (set only on success).
   const hasMarkedOnlineRef = useRef(false);
   // Prevents re-entry while a markOnline call is in flight.
@@ -329,9 +337,12 @@ function WaitingRoomScreenInner() {
 
     if (activeSession.status === "cancelled") {
       if (userId) hydrateWallet(userId);
-      Alert.alert("Session Cancelled", "This session has been cancelled.", [
-        { text: "OK", onPress: () => router.dismissAll() },
-      ]);
+      StatusBanner.show({
+        severity: "warn",
+        message: "This session was cancelled.",
+        durationMs: 3500,
+      });
+      router.dismissAll();
     }
 
     if (activeSession.status === "active") {
@@ -375,37 +386,39 @@ function WaitingRoomScreenInner() {
       // updates the subscription and triggers router.replace.
     } catch (err) {
       setIsStarting(false);
-      Alert.alert(
-        "Could Not Start Session",
-        getFunctionErrorMessage(err, "Please try again."),
-      );
+      StatusBanner.show({
+        severity: "error",
+        message: getFunctionErrorMessage(
+          err,
+          "Could not start session. Please try again.",
+        ),
+      });
     }
   }, [sessionId, startSession, isStarting]);
 
   const handleCancel = useCallback(() => {
     if (!sessionId) return;
-    Alert.alert(
-      "Cancel Session",
-      "Are you sure you want to cancel this session? All participants will be notified.",
-      [
-        { text: "Keep Waiting", style: "cancel" },
-        {
-          text: "Cancel Session",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await cancelSession(sessionId);
-            } catch (err) {
-              Alert.alert(
-                "Could Not Cancel Session",
-                getFunctionErrorMessage(err, "Please try again."),
-              );
-            }
-          },
-        },
-      ],
-    );
-  }, [sessionId, cancelSession]);
+    setCancelModalVisible(true);
+  }, [sessionId]);
+
+  const handleConfirmCancel = useCallback(async () => {
+    if (!sessionId || isCancelling) return;
+    setIsCancelling(true);
+    try {
+      await cancelSession(sessionId);
+    } catch (err) {
+      StatusBanner.show({
+        severity: "error",
+        message: getFunctionErrorMessage(
+          err,
+          "Could not cancel session. Please try again.",
+        ),
+      });
+    } finally {
+      setIsCancelling(false);
+      setCancelModalVisible(false);
+    }
+  }, [sessionId, cancelSession, isCancelling]);
 
   const handleShare = useCallback(async () => {
     if (!sessionId) return;
@@ -576,6 +589,20 @@ function WaitingRoomScreenInner() {
           )}
         </View>
       </View>
+
+      <HoldToConfirmModal
+        visible={cancelModalVisible}
+        title="Cancel this session?"
+        body={`Everyone in the waiting room will be refunded and notified. ${
+          activeSession.poolTotal
+            ? `Pool of ${formatMoney(activeSession.poolTotal)} will be returned.`
+            : ""
+        }`}
+        holdLabel={isCancelling ? "Cancelling…" : "Hold to cancel session"}
+        cancelLabel="Keep Waiting"
+        onCancel={() => setCancelModalVisible(false)}
+        onConfirm={handleConfirmCancel}
+      />
     </SafeAreaView>
   );
 }

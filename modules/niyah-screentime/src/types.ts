@@ -57,3 +57,59 @@ export type NiyahScreenTimeModuleEvents = {
    */
   onSurrenderRequested: (event: Record<string, never>) => void;
 };
+
+// ---------------------------------------------------------------------------
+// DeviceActivityReport baseline (Lane B2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-app baseline row written by the NiyahDeviceActivityReport extension
+ * to shared App Group UserDefaults. `appBundleHash` is the only stable
+ * cross-process identifier — Apple's ApplicationToken is opaque, so the
+ * extension hashes it for use as a join key.
+ */
+export interface BaselineApp {
+  appBundleHash: string;
+  displayName: string;
+  categoryName: string;
+  dailyAverageMinutes: number;
+  weeklyTotalMinutes: number;
+}
+
+// ---------------------------------------------------------------------------
+// Live Activity (Lane B7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Static attributes for a Live Activity — set once at session start, never
+ * change for the activity's lifetime. Matches `NiyahActivityAttributes` Swift
+ * struct in `modules/niyah-screentime/ios/NiyahActivityAttributes.swift`.
+ */
+export interface LiveActivityAttrs {
+  sessionId: string;
+  sessionType: "solo" | "group";
+  /** Asset name for the user's blob avatar in the widget extension bundle. */
+  blobAssetName: string;
+}
+
+/**
+ * Dynamic content-state for the Live Activity. Updated on every Firestore
+ * session-doc tick from the JS side.
+ */
+export interface LiveActivityState {
+  /** Absolute end timestamp in seconds since epoch. */
+  endsAt: number;
+  /** Top-3 leaderboard rows. Empty for solo sessions. */
+  leaderboard: LiveActivityLeaderboardEntry[];
+  /** Optimistic local payout share for the current user in cents. */
+  userPayoutCents: number;
+}
+
+export interface LiveActivityLeaderboardEntry {
+  name: string;
+  status: "active" | "surrendered" | "completed";
+  violations: number;
+}
+
+/** Combined payload accepted by `startLiveActivity` — attrs + initial state. */
+export type LiveActivityStartPayload = LiveActivityAttrs & LiveActivityState;

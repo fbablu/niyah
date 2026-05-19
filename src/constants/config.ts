@@ -110,3 +110,12 @@ export const PENDING_REFERRAL_KEY = "@niyah/pending_referral"; // AsyncStorage k
 // (otherwise phone auth falls back to reCAPTCHA web flow, which is brittle).
 export const PHONE_AUTH_DISABLED =
   process.env.EXPO_PUBLIC_DISABLE_PHONE_AUTH === "true";
+
+// Lane B (DeviceActivityReport + LiveActivity) runtime feature flag.
+//
+// Extensions ALWAYS register at build time now (via @bacons/apple-targets in
+// app.config.js). This flag only gates user-facing surfaces: the new
+// screentime-priorities onboarding screen + Live Activity start calls in
+// the session stores. Lets us soft-roll the feature even when the binary
+// already ships with the targets compiled.
+export const LANE_B_ENABLED = process.env.EXPO_PUBLIC_LANE_B_ENABLED === "true";

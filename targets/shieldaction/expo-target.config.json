@@ -1,0 +1,10 @@
+{
+  "type": "shield-action",
+  "bundleIdentifier": ".shield-action",
+  "deploymentTarget": "16.0",
+  "frameworks": ["DeviceActivity"],
+  "entitlements": {
+    "com.apple.developer.family-controls": true,
+    "com.apple.security.application-groups": ["group.com.niyah.app"]
+  }
+}

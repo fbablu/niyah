@@ -2,40 +2,45 @@
 
 > Development phases, current status, and blockers.
 > See also: [Features](./features.md) | [Payments](./payments.md) | [Native Modules](./native-modules.md)
+>
+> **Active plan:** [Post-Demo Stabilization & Premium UX](./post-demo-roadmap.md) — 4 parallel swimlanes covering all 11 issues from TestFlight 1.0.0 (11) testing on May 5, 2026.
 
-## Current Status (Apr 12, 2026)
+## Current Status (May 13, 2026)
 
-| Area                     | Status    | Notes                                                                           |
-| ------------------------ | --------- | ------------------------------------------------------------------------------- |
-| Firebase Auth            | Done      | Google, Apple, Email magic link, Phone SMS OTP via RNFB                         |
-| Firestore                | Done      | Profiles, wallets, follows, sessions. Crash recovery.                           |
-| Solo Sessions (Backend)  | Done      | sessionStore + handleSessionComplete/Forfeit CFs. Full lifecycle.               |
-| Solo Sessions (UI)       | Not Wired | Backend ready, needs UI wiring (~7.5h). Planned April 16-18.                    |
-| Quick Block              | Done      | One-tap blocking without stake (`quick-block.tsx`)                              |
-| Duo Sessions             | Done      | Partner store, lifecycle, Venmo deep links                                      |
-| Group Sessions (UI)      | Done      | N-person, payout algorithm, transfer tracking, propose, waiting room, invites   |
-| Group Sessions (Backend) | Done      | 7 Cloud Functions (create, invite, accept, start, report, cancel, auto-timeout) |
-| Social Features          | Done      | Following/followers, public profiles, reputation (5 tiers)                      |
-| Contact Discovery        | Done      | `findContactsOnNiyah` Cloud Function, cached in socialStore                     |
-| Referral System          | Done      | Deep link invites, reputation boost, partner auto-connect                       |
-| Theme System             | Done      | Dark/light via themeStore + useColors hook                                      |
-| Onboarding               | Done      | Screen Time setup flow, blob scenes, profile setup                              |
-| Testing                  | Done      | 1018 tests (48 suites), unit + integration coverage                             |
-| Screen Time (Swift)      | Done      | Production-quality. Auth, picker, blocking, violation polling, custom shield.   |
-| Screen Time (Shield)     | Done      | Custom Niyah-branded shield with "Stay Focused" / "Surrender" buttons           |
-| Screen Time (Wiring)     | Done      | Quick-block and group session flows wired. Solo staked wiring pending.          |
-| Screen Time (Stats)      | Post-demo | DeviceActivityReport deferred                                                   |
-| Schedule Blocking        | Post-demo | scheduleStore, schedule-builder, calendar integration deferred                  |
-| Push Notifications       | Done      | FCM token management, 9 notification types wired in Cloud Functions             |
-| Stripe Payments          | Done      | 24 Cloud Functions, deposit/withdrawal/Connect Express/Plaid bank linking       |
-| Legal Acceptance         | Done      | `acceptLegalTerms` Cloud Function, server-timestamped                           |
-| Firestore Rules          | Done      | Hardened rules for users, wallets, follows, sessions. Default deny.             |
-| Security Audit           | Done      | Server-side validation, rate limiting, SSL pinning, screen protection           |
-| Firebase App Check       | Post-demo | Biggest remaining security gap. Planned for campus launch phase.                |
-| Config Externalized      | Done      | Firebase config gitignored, env vars, keys rotated                              |
-| Payout Algorithm         | Done      | Solo 1x (stickK model), group pool split with greedy transfer netting           |
-| App Icon + Splash        | Done      | New pillow icon, green (#2D6A4F) splash screen                                  |
-| Withdrawal Flow          | Done      | Stripe Express onboarding, polished UI, security disclaimer                     |
+| Area                     | Status     | Notes                                                                           |
+| ------------------------ | ---------- | ------------------------------------------------------------------------------- |
+| Firebase Auth            | Done       | Google, Apple, Email magic link, Phone SMS OTP via RNFB                         |
+| Firestore                | Done       | Profiles, wallets, follows, sessions. Crash recovery.                           |
+| Solo Sessions (Backend)  | Done       | sessionStore + handleSessionComplete/Forfeit CFs. Full lifecycle.               |
+| Solo Sessions (UI)       | Done       | Wired April 16-18; flexible-cadence solo flow live in TestFlight.               |
+| Quick Block              | Done       | One-tap blocking without stake (`quick-block.tsx`)                              |
+| Duo Sessions             | Done       | Partner store, lifecycle, Venmo deep links                                      |
+| Group Sessions (UI)      | Done       | N-person, payout algorithm, transfer tracking, propose, waiting room, invites   |
+| Group Sessions (Backend) | Done       | 7 Cloud Functions (create, invite, accept, start, report, cancel, auto-timeout) |
+| Social Features          | Done       | Following/followers, public profiles, reputation (5 tiers)                      |
+| Contact Discovery        | Done       | `findContactsOnNiyah` Cloud Function, cached in socialStore                     |
+| Referral System          | Done       | Deep link invites, reputation boost, partner auto-connect                       |
+| Theme System             | Done       | Dark/light via themeStore + useColors hook                                      |
+| Onboarding               | Done       | Screen Time setup flow, blob scenes, profile setup                              |
+| Testing                  | Done       | 1018 tests (48 suites), unit + integration coverage                             |
+| Screen Time (Swift)      | Done       | Production-quality. Auth, picker, blocking, violation polling, custom shield.   |
+| Screen Time (Shield)     | Done       | Custom Niyah-branded shield with "Stay Focused" / "Surrender" buttons           |
+| Screen Time (Wiring)     | Done       | Quick-block, solo staked, and group session flows all wired.                    |
+| Screen Time (Stats)      | Phase 4    | DeviceActivityReport extension scoped in [post-demo plan](./post-demo-roadmap.md) Lane B1. |
+| Schedule Blocking        | Phase 4    | scheduleStore, schedule-builder, calendar integration; reopens post-grad        |
+| Push Notifications       | Done       | FCM token management, 9 notification types wired; foreground via notifee (Lane C5). |
+| Stripe Payments          | Done       | Live keys deployed, 24 Cloud Functions, deposit/withdrawal/Connect/Plaid.       |
+| Legal Acceptance         | Done       | `acceptLegalTerms` Cloud Function, server-timestamped                           |
+| Firestore Rules          | Done       | Hardened rules for users, wallets, follows, sessions. Default deny.             |
+| Security Audit           | Done       | Server-side validation, rate limiting, SSL pinning, screen protection           |
+| Firebase App Check       | In Progress | Soft-fail today; flipping to enforce on auth-related CFs in Lane A2.            |
+| Config Externalized      | Done       | Firebase config gitignored, env vars, keys rotated                              |
+| Payout Algorithm         | Done       | Solo 1x in store / 2x in algo (open — see post-demo open questions); group pool split + greedy transfers. |
+| App Icon + Splash        | Done       | New pillow icon, green (#2D6A4F) splash screen                                  |
+| Withdrawal Flow          | Done       | Stripe Express onboarding, polished UI, security disclaimer. Bank manage (replace/unlink) in Lane D. |
+| Account Linking          | Phase 4    | Same-user, multi-provider linking via `linkWithCredential` (Lane A3).           |
+| Live Activities          | Phase 4    | Lock-screen + Dynamic Island widget (Lane B6/B7).                               |
+| Group Equity             | Phase 4    | Cap-target model verified by DeviceActivityReport (see [group-equity.md](./group-equity.md)). |
 
 ### Apple Developer Account
 
@@ -46,15 +51,16 @@
   - `com.niyah.app.device-activity-monitor`
   - `com.niyah.app.shield-action`
   - `com.niyah.app.shield-config`
+- [ ] FamilyControls Distribution for `com.niyah.app.device-activity-report` (new, Lane B1)
 
-### Business & Payments (as of 2026-04-10)
+### Business & Payments (as of 2026-05-13)
 
 - [x] Niyah, Inc. incorporated with EIN
-- [x] Stripe live mode -- business account active, live API keys available
+- [x] Stripe live mode -- business account active, live API keys deployed to Firebase Secret Manager
 - [x] Plaid production -- approved, pay-as-you-go ($1.50/initial Link call)
+- [x] Live keys deployed to `.env` + Firebase Secret Manager (Stripe + Plaid)
+- [x] Stripe production webhook endpoint configured
 - [x] Landing page live at niyah.live
-- [ ] Live keys deployed to .env + Firebase Secret Manager
-- [ ] Stripe production webhook endpoint configured
 
 ### Firebase Project
 
@@ -70,59 +76,48 @@
 
 **Revenue model**: Free now, subscription later ($3-5/mo for analytics + schedules).
 
-1. **Phase 1** -- Demo Day (April 15) + Final Presentation (April 16)
-2. **Phase 2** -- Solo Sessions (April 16-18)
-3. **Phase 3** -- Campus Launch "Lock In For Finals" (April 19 - May 5)
-4. **Phase 4** -- Post-Graduation Product Build (May 8+)
+1. **Phase 1** -- ✅ Demo Day (April 15) + Final Presentation (April 16)
+2. **Phase 2** -- ✅ Solo Sessions (April 16-18)
+3. **Phase 3** -- ✅ Campus Launch "Lock In For Finals" (April 19 - May 5)
+4. **Phase 4** -- 🚧 Premium UX Push (May 8 - June, in flight)
 5. **Phase 5** -- Public Launch + Fundraise
 
-## Phase 1: Demo Day (April 15-16)
+## Phase 1: Demo Day (April 15-16) — ✅ Complete
 
-**Goal**: Zero crashes during live demo. Group sessions with real money.
+Live demo shipped April 15; Immersion Showcase poster + station demo on April 16. Zero crashes during the run, real Stripe deposits and group payouts flowed live. Historical detail: [Sprint Plan](./sprint-april15.md).
 
-- Stabilize demo flow on physical device
-- Deploy Cloud Functions with live keys
-- E2E test deposit → session → shield → complete → withdrawal
-- Test group session on 2+ devices
-- Rehearse demo 3x
-- Poster for Immersion Showcase (36x48, product-focused)
+## Phase 2: Solo Sessions (April 16-18) — ✅ Complete
 
-See [Sprint Plan](./sprint-april15.md) for detailed checklist.
+Solo staked flow wired through select → confirm → active → complete/surrender. `sessionStore` is the source of truth for solo lifecycle; `handleSessionComplete` and `handleSessionForfeit` Cloud Functions handle settlement.
 
-## Phase 2: Solo Sessions (April 16-18)
+## Phase 3: Campus Launch (April 19 - May 5) — ✅ Complete
 
-**Goal**: Any user can stake money alone on day 1. Removes chicken-and-egg problem.
+**"Lock In For Finals"** TestFlight cohort at Vanderbilt during finals.
 
-~7.5 hours of UI wiring. Backend + Cloud Functions already 100% built.
+- Posters/flyers with QR → TestFlight build 1.0.0 (11)
+- Promo: "Complete 5 sessions with 2+ friends → earn $5 free" ($100 pool)
+- FCM push (9 types), Sentry crash monitoring, analytics events live
+- Outcomes (DAU, completion rate, avg stake, retention) being compiled — first cut of numbers will feed Phase 5 pitch deck. Need to record final numbers here once tallied.
 
-- Add "Solo Focus" entry on Session tab
-- Wire select → confirm → active → complete/surrender for solo staked mode
-- Read from `sessionStore` instead of `groupSessionStore` for solo
-- Test full lifecycle: stake → block → complete/surrender → payout/forfeit
+May 5 user-testing on build 1.0.0 (11) surfaced 11 UX / reliability gaps that became Phase 4.
 
-## Phase 3: Campus Launch (April 19 - May 5)
+## Phase 4: Premium UX Push (May 8 - June) — 🚧 In Flight
 
-**"Lock In For Finals"** — targeting Vanderbilt students during finals season.
+Closes the 11 gaps from the May 5 TestFlight testing and lifts the app's polish for the post-graduation fundraise. Detailed plan: [post-demo-roadmap.md](./post-demo-roadmap.md). Four parallel swimlanes:
 
-- **Hard blocker**: Extension entitlements must be approved for TestFlight distribution
-- Posters/flyers with QR code to TestFlight
-- Promo: "Complete 5 sessions with friends → earn $5 free" ($100 pool, 4 teammates × $25)
-- Firebase App Check implementation (safe post-demo with new native build)
-- Crash monitoring (Sentry)
-- Analytics: DAU, completion rate, avg stake, retention
-- Target: 50+ active users with measurable retention
+- **Lane A — Auth & Identity (3d)**. Phone OTP global throttle, App Check enforce on auth-related CFs, multi-provider account linking (`linkWithCredential`), `mergeDuplicateUsers` admin CF, profile-sync source-of-truth fix, global `react-native-keyboard-controller`.
+- **Lane B — Native iOS (5d)**. New `NiyahDeviceActivityReport` extension (for usage baselines), new `NiyahLiveActivity` widget (lock-screen + Dynamic Island), redesigned app-selection onboarding, per-app shield variants, two-step shield surrender via push.
+- **Lane C — Inline UX & Push (3d)**. `<StatusBanner>` replacing `Alert.alert` across group flow, YouTube-style scrubber timer with pause = surrender confirm, foreground push via notifee, 4 new in-session FCM types (`member_app_opened`, `leaderboard_shift`, `session_progress_*`, `surrender_confirm_pending`), optimistic group leaderboard.
+- **Lane D — Bank & Payout Reliability (2d)**. `unlinkBankAccount` + `replaceBankAccount` CFs, profile "Manage Bank" UI, withdrawal availability indicator, nightly `reconcileWalletBalances` scheduled CF, idempotency keys on every `stripe.transfers.create`, Sentry breadcrumbs on the payout path, integration test for earned-funds withdrawal.
 
-## Phase 4: Post-Graduation Product (May 8+)
+Lane E (doc refresh) is independent and runs anytime — that's this commit.
 
-Priority order:
+Open items still needing user decision:
 
-1. Schedule-based blocking (DeviceActivitySchedule API) — compete with Opal on features
-2. DeviceActivityReport analytics — screen time statistics, trends, streaks
-3. Custom in-app KYC — replace Stripe Express with native verification
-4. Plant social credit system — plant health = app habit score
-5. Interactive blob maker — pick shape, color, expression
-6. Subscription tier — $3-5/mo for analytics + schedules
-7. Android investigation — different blocking API (AccessibilityService / UsageStatsManager)
+1. Solo payout multiplier — 1x (stickK) vs 2x (`SOLO_COMPLETION_MULTIPLIER`). Today the two paths disagree.
+2. Default `CAP_FACTOR` for the [cap-target equity model](./group-equity.md).
+3. Frequency limit for `member_app_opened` push (30s cooldown vs higher).
+4. Final Phase 3 outcome numbers for the status table above.
 
 ## Phase 5: Public Launch + Fundraise
 
@@ -139,6 +134,8 @@ Priority order:
 | ~~FamilyControls Development entitlement~~ | ~~Cannot test Screen Time on device~~                             | ~~Apply in Apple Developer portal~~                                    | **Resolved**       |
 | ~~FamilyControls Distribution (main app)~~ | ~~Cannot distribute via TestFlight/App Store~~                    | ~~Apple approved 2026-04-09~~                                          | **Resolved**       |
 | FamilyControls Distribution (3 extensions) | Extensions may not work in TestFlight builds                      | Submit for `device-activity-monitor`, `shield-action`, `shield-config` | Submitted April 10 |
+| FamilyControls Distribution (`device-activity-report`) | Needed for baseline + cap-target equity                | Submit when extension target lands (Lane B1)                           | Pending submit     |
 | ~~Shield surrender desync bug~~            | ~~Shield unblocks apps but Niyah app still shows session active~~ | ~~Fixed: shield sets flag + opens app, JS listener catches it~~        | **Resolved**       |
-| Firebase App Check                         | Anyone with project ID can call Cloud Functions                   | Firebase Console setup + code changes. Planned for campus launch.      | Post-demo          |
-| Stripe bank verification                   | Withdrawal demo may fail if micro-deposits not cleared            | Verify bank by April 14, or demo UI only                               | Pending            |
+| ~~Firebase App Check~~                     | ~~Anyone with project ID can call Cloud Functions~~               | ~~Soft-fail in prod; flipping to enforce in Lane A2~~                  | **In progress**    |
+| ~~Stripe bank verification~~               | ~~Withdrawal demo may fail if micro-deposits not cleared~~        | ~~Resolved: live keys deployed, withdrawals running~~                  | **Resolved**       |
+| Wallet balance drift                       | Edge-case retries could double-credit                             | Nightly `reconcileWalletBalances` + idempotency keys (Lane D5)         | In progress        |

@@ -30,9 +30,28 @@ import {
   arrayUnion,
   arrayRemove,
 } from "@react-native-firebase/firestore";
-import { Alert, Platform } from "react-native";
+import { Platform } from "react-native";
 import { router, type RelativePathString } from "expo-router";
+import notifee, {
+  AndroidImportance,
+  EventType,
+  TriggerType,
+  type TimestampTrigger,
+} from "@notifee/react-native";
 import { logger } from "../utils/logger";
+
+const NOTIFEE_CHANNEL_ID = "niyah-default";
+let notifeeChannelCreated = false;
+
+async function ensureNotifeeChannel(): Promise<void> {
+  if (notifeeChannelCreated || Platform.OS !== "android") return;
+  await notifee.createChannel({
+    id: NOTIFEE_CHANNEL_ID,
+    name: "Niyah Notifications",
+    importance: AndroidImportance.HIGH,
+  });
+  notifeeChannelCreated = true;
+}
 
 const db = getFirestore();
 
@@ -182,27 +201,72 @@ function handleNotificationNavigation(
     case "session_complete":
       router.push("/session/complete");
       break;
+    // In-session pushes — they're informational; keep the user on the
+    // active screen instead of forcing a navigation. Tapping the banner
+    // still routes there in case the app was backgrounded.
+    case "member_app_opened":
+    case "leaderboard_shift":
+    case "session_progress_25":
+    case "session_progress_50":
+    case "session_progress_75":
+    case "shield_violation":
+      router.push("/session/active");
+      break;
+    // Two-step shield surrender (Lane B5): tapping the push opens the
+    // active session with a query param so the confirm sheet renders.
+    case "surrender_confirm_pending":
+      router.push(
+        "/session/active?confirmSurrender=true" as RelativePathString,
+      );
+      break;
     default:
       break;
   }
 }
 
-/** Set up foreground message handler — shows in-app alert. */
+/** Set up foreground message handler — displays a system-style banner via notifee. */
 export function setupForegroundHandler(): () => void {
-  return subscribeToMessages(getMessagingInstance(), async (remoteMessage) => {
-    const { notification, data } = remoteMessage;
-    if (!notification) return;
+  // Apple "critical alert" level requires a special entitlement reserved for
+  // health/safety apps. timeSensitive bypasses Focus modes without that gate.
+  const unsubMessages = subscribeToMessages(
+    getMessagingInstance(),
+    async (remoteMessage) => {
+      const { notification, data } = remoteMessage;
+      if (!notification) return;
 
-    // Show in-app alert for foreground messages
-    Alert.alert(notification.title || "Niyah", notification.body || "", [
-      { text: "Dismiss", style: "cancel" },
-      {
-        text: "View",
-        onPress: () =>
-          handleNotificationNavigation(data as Record<string, string>),
-      },
-    ]);
+      await ensureNotifeeChannel();
+      const payload = (data ?? {}) as Record<string, string>;
+
+      await notifee.displayNotification({
+        title: notification.title || "Niyah",
+        body: notification.body || "",
+        data: payload,
+        android: {
+          channelId: NOTIFEE_CHANNEL_ID,
+          pressAction: { id: "default" },
+          smallIcon: "ic_notification",
+        },
+        ios: {
+          sound: "default",
+          interruptionLevel: "timeSensitive",
+          categoryId: payload.type,
+        },
+      });
+    },
+  );
+
+  const unsubTap = notifee.onForegroundEvent(({ type, detail }) => {
+    if (type !== EventType.PRESS) return;
+    const data = detail.notification?.data as
+      | Record<string, string>
+      | undefined;
+    handleNotificationNavigation(data);
   });
+
+  return () => {
+    unsubMessages();
+    unsubTap();
+  };
 }
 
 /** Set up background message handler. Must be called at app entry point. */
@@ -211,6 +275,18 @@ export function setupBackgroundHandler(): void {
     logger.info("Background message received:", remoteMessage.messageId);
     // Background messages are handled by the system notification tray.
     // Navigation happens via onNotificationOpenedApp when user taps.
+  });
+
+  // Local notifications (e.g. the SURRENDER_CONFIRM push scheduled by
+  // ShieldActionExtension) bypass FCM and arrive through notifee. Register
+  // the background tap handler here at module load so taps from outside the
+  // app deep-link correctly even on cold start.
+  notifee.onBackgroundEvent(async ({ type, detail }) => {
+    if (type !== EventType.PRESS) return;
+    const data = detail.notification?.data as
+      | Record<string, string>
+      | undefined;
+    handleNotificationNavigation(data);
   });
 }
 
@@ -275,4 +351,52 @@ export function resetNotifications(): void {
     activeCleanup = null;
   }
   initPromise = null;
+}
+
+// ─── Session-end scheduled notification ─────────────────────────────────────
+// Fires at the moment the timer expires so the user knows the session is done
+// even if the app is backgrounded. Notifee schedules with the system, so it
+// fires whether or not Niyah is running.
+
+const SESSION_END_NOTIFICATION_ID = "niyah-session-end";
+
+export async function scheduleSessionEndNotification(
+  sessionEndsAt: Date,
+  body: string,
+): Promise<void> {
+  await ensureNotifeeChannel();
+  const trigger: TimestampTrigger = {
+    type: TriggerType.TIMESTAMP,
+    timestamp: sessionEndsAt.getTime(),
+  };
+  try {
+    await notifee.createTriggerNotification(
+      {
+        id: SESSION_END_NOTIFICATION_ID,
+        title: "Focus session complete",
+        body,
+        data: { type: "session_complete" },
+        android: {
+          channelId: NOTIFEE_CHANNEL_ID,
+          pressAction: { id: "default" },
+          smallIcon: "ic_notification",
+        },
+        ios: {
+          sound: "default",
+          interruptionLevel: "timeSensitive",
+        },
+      },
+      trigger,
+    );
+  } catch (err) {
+    logger.warn("scheduleSessionEndNotification failed:", err);
+  }
+}
+
+export async function cancelSessionEndNotification(): Promise<void> {
+  try {
+    await notifee.cancelTriggerNotification(SESSION_END_NOTIFICATION_ID);
+  } catch (err) {
+    logger.warn("cancelSessionEndNotification failed:", err);
+  }
 }

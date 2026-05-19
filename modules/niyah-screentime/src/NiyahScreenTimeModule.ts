@@ -3,6 +3,7 @@ import type {
   NiyahScreenTimeModuleEvents,
   AuthorizationStatus,
   AppSelectionToken,
+  BaselineApp,
 } from "./types";
 
 declare class NiyahScreenTimeModuleClass extends NativeModule<NiyahScreenTimeModuleEvents> {
@@ -98,6 +99,39 @@ declare class NiyahScreenTimeModuleClass extends NativeModule<NiyahScreenTimeMod
    * If found, clears the flag and emits onSurrenderRequested.
    */
   checkPendingSurrender(): boolean;
+
+  // ------------------------------------------------------------------
+  // DeviceActivityReport baseline (Lane B2)
+  // ------------------------------------------------------------------
+
+  /**
+   * Return the per-app baseline snapshot the NiyahDeviceActivityReport
+   * extension persisted. Empty array if the extension hasn't yet
+   * aggregated data — typically requires ~24h after first authorization.
+   */
+  getScreenTimeBaseline(): BaselineApp[];
+
+  // ------------------------------------------------------------------
+  // Live Activity (Lane B7)
+  // ------------------------------------------------------------------
+
+  /**
+   * Start a Live Activity for an in-progress focus session.
+   * `payload` JSON includes attrs + initial state. Returns true if the
+   * activity was started, false otherwise (Live Activities disabled,
+   * iOS <16.1, or ActivityKit error).
+   */
+  startLiveActivity(payloadJson: string): Promise<boolean>;
+
+  /**
+   * Update the active Live Activity's content state.
+   * `stateJson` is the stringified LiveActivityState. No-op if no activity
+   * is currently running.
+   */
+  updateLiveActivity(stateJson: string): Promise<boolean>;
+
+  /** End the active Live Activity. Call on session complete or surrender. */
+  endLiveActivity(): Promise<boolean>;
 }
 
 export default requireNativeModule<NiyahScreenTimeModuleClass>(

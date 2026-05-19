@@ -5,4 +5,9 @@ export type {
   AppSelectionToken,
   ShieldViolationEvent,
   NiyahScreenTimeModuleEvents,
+  BaselineApp,
+  LiveActivityAttrs,
+  LiveActivityState,
+  LiveActivityLeaderboardEntry,
+  LiveActivityStartPayload,
 } from "./types";

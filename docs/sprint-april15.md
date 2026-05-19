@@ -1,3 +1,5 @@
+> **Historical — Sprint complete.** Demo Day landed April 15, 2026 and the April 16 Immersion Showcase shipped on schedule. Active post-demo work is tracked in [post-demo-roadmap.md](./post-demo-roadmap.md); top-level phase view in [roadmap.md](./roadmap.md). Kept here for reference.
+
 # Niyah: Demo Day Sprint (Updated April 12, 2026)
 
 ## DEMO DAY: April 15, 2026
