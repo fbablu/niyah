@@ -46,7 +46,7 @@ eas secret:create --scope project --name GOOGLE_SERVICES_JSON --type file --valu
 
 ```bash
 pnpm start             # Start dev server (requires dev client build first)
-pnpm start:device      # Start with USB port forwarding (physical device)
+pnpm doctor            # Diagnose Mac+iPhone dev state, recommend next command
 pnpm ios               # Start with iOS simulator
 pnpm android           # Start with Android emulator
 npx expo start --clear # Clear cache and start
@@ -91,20 +91,29 @@ pnpm build:production  # Production build (all platforms)
 
 ## Physical Device Development
 
-Two approaches for iOS device testing:
+iOS dev client cannot fetch the JS bundle over USB cable alone — Apple has no equivalent of `adb reverse`. Metro requires IP connectivity between Mac and phone. Three viable transports:
 
-### WiFi (simpler)
+### Same wifi (best)
 
-Ensure phone and laptop are on the same WiFi network, then `pnpm start`. The dev client auto-discovers the server.
-
-### USB (scripts/dev-device.sh)
-
-Uses `iproxy` (from `libimobiledevice`) for USB port forwarding. No WiFi needed.
+Mac and phone on the same network. Phone connects to Metro at Mac's LAN IP. Works on home wifi and on public wifi without client isolation.
 
 ```bash
-brew install libimobiledevice  # one-time
-pnpm build:local               # build + install on device
-pnpm start:device              # connect via USB (skips build)
+pnpm build:local       # build + install on device (USB cable)
+pnpm start             # Metro on Mac, phone auto-discovers via LAN
+```
+
+### iPhone hotspot
+
+When you're on a network you don't control (cafe, campus, hotel) and want guaranteed connectivity. Enable Personal Hotspot on the iPhone, join it from the Mac, then run `pnpm start`. Mac + phone now share NAT, LAN discovery works.
+
+### Ngrok tunnel
+
+Cross-network fallback (`pnpm start --tunnel`). Often blocked by public-wifi DPI; ngrok tunnel handshake fails with `remote gone away`. Don't depend on this — `pnpm doctor` probes ngrok reachability before recommending.
+
+### Diagnose first
+
+```bash
+pnpm doctor            # prints state of USB, DDI, network, pods; recommends command
 ```
 
 ## Cloud Functions
